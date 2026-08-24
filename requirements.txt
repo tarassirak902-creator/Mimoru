@@ -1,0 +1,7 @@
+aiogram==3.30.0
+SQLAlchemy[asyncio]>=2.0,<2.2
+asyncpg>=0.30,<1
+redis>=5,<7
+alembic>=1.16,<2
+pydantic-settings>=2.7,<3
+structlog>=24,<26

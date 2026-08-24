@@ -1,0 +1,64 @@
+name: mimoru
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["sh", "-c", "python -m scripts.ensure_version_column && alembic upgrade head && python -m app.preflight && python -m app.main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-moderator}
+      POSTGRES_USER: ${POSTGRES_USER:-moderator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moderator}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-moderator} -d ${POSTGRES_DB:-moderator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts_backup.sh:/scripts_backup.sh:ro
+      - backups:/backups
+    entrypoint: ["sh", "-c"]
+    command: ["while true; do /scripts_backup.sh; sleep 86400; done"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  backups:
