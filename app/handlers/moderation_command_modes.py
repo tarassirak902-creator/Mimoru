@@ -162,9 +162,15 @@ async def _username_target(session: AsyncSession, group_id: int, raw: str) -> in
 
 
 def _split_command(text: str) -> tuple[str, list[str], str]:
-    lines = text.replace("\r\n", "\n").split("\n")
+    # splitlines() handles \n/\r\n as well as Unicode line separators that
+    # third-party Telegram clients may preserve in message.text.
+    lines = text.splitlines()
+    if not lines:
+        return "", [], ""
     first = lines[0].strip()
     parts = first.split()
+    if not parts:
+        return "", [], "\n".join(lines[1:]).strip()
     command = parts[0].casefold()
     reason = "\n".join(lines[1:]).strip()
     return command, parts[1:], reason
