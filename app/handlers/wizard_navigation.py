@@ -14,9 +14,6 @@ from app.services.ui import clean_ui_text, panel_header
 
 router = Router(name=__name__)
 
-PROFILES = "community|gaming|crypto|sales|news|education"
-LEVELS = "minimal|standard|maximum"
-
 
 async def _owned_group(session: AsyncSession, group_id: int, user_id: int) -> Group | None:
     query = select(Group).where(Group.id == group_id, Group.is_active.is_(True))
@@ -54,7 +51,11 @@ def _level_menu(group_id: int, profile: str) -> InlineKeyboardMarkup:
 
 
 def _yes_no_menu(group_id: int, profile: str, level: str, step: int, field: str) -> InlineKeyboardMarkup:
-    previous = f"setupnav:{group_id}:step{step - 1}:{profile}:{level}" if step > 3 else f"setupnav:{group_id}:step2:{profile}"
+    previous = (
+        f"setupnav:{group_id}:step{step - 1}:{profile}:{level}"
+        if step > 3
+        else f"setupnav:{group_id}:step2:{profile}"
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Да", callback_data=f"setupnav:{group_id}:{field}:{profile}:{level}:on"),
@@ -67,6 +68,19 @@ def _yes_no_menu(group_id: int, profile: str, level: str, step: int, field: str)
 
 def _wizard_text(group: Group, step: int, body: str) -> str:
     return panel_header("Мастер настройки", f"Группа: {clean_ui_text(group.title)}") + f"\n\nШаг {step} из 6 · {body}"
+
+
+async def _render_step1(callback: CallbackQuery, session: AsyncSession) -> None:
+    group_id = int(callback.data.split(":")[1])
+    group = await _owned_group(session, group_id, callback.from_user.id)
+    if not group:
+        await callback.answer("Настройка доступна только владельцу группы.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _wizard_text(group, 1, "Какой это тип сообщества?"),
+        reply_markup=_profile_menu(group.id),
+    )
+    await callback.answer()
 
 
 async def _render_step3(callback: CallbackQuery, session: AsyncSession, group_id: int, profile: str, level: str) -> None:
@@ -117,18 +131,17 @@ async def _render_step6(callback: CallbackQuery, session: AsyncSession, group_id
     await callback.answer()
 
 
+# Compatibility: old messages and existing keyboards may still contain
+# setup:<group_id>:start. This router is registered before navigation_fixes, so
+# old buttons enter the same reversible flow instead of the legacy wizard.
+@router.callback_query(F.data.regexp(r"^setup:\d+:start$"))
+async def legacy_start(callback: CallbackQuery, session: AsyncSession) -> None:
+    await _render_step1(callback, session)
+
+
 @router.callback_query(F.data.regexp(r"^setupnav:\d+:step1$"))
 async def step1(callback: CallbackQuery, session: AsyncSession) -> None:
-    group_id = int(callback.data.split(":")[1])
-    group = await _owned_group(session, group_id, callback.from_user.id)
-    if not group:
-        await callback.answer("Нет доступа.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        _wizard_text(group, 1, "Какой это тип сообщества?"),
-        reply_markup=_profile_menu(group.id),
-    )
-    await callback.answer()
+    await _render_step1(callback, session)
 
 
 @router.callback_query(F.data.regexp(r"^setupnav:\d+:type:(community|gaming|crypto|sales|news|education)$"))
@@ -214,7 +227,12 @@ async def choose_captcha(callback: CallbackQuery, session: AsyncSession) -> None
     def mutate(group: Group) -> None:
         group.settings.captcha_enabled = value == "on"
 
-    group, _ = await mutate_setup_group(session, group_id=int(raw_group), actor_id=callback.from_user.id, mutation=mutate)
+    group, _ = await mutate_setup_group(
+        session,
+        group_id=int(raw_group),
+        actor_id=callback.from_user.id,
+        mutation=mutate,
+    )
     if not group:
         await callback.answer("Нет доступа.", show_alert=True)
         return
@@ -232,7 +250,12 @@ async def choose_welcome(callback: CallbackQuery, session: AsyncSession) -> None
     def mutate(group: Group) -> None:
         group.settings.welcome_enabled = value == "on"
 
-    group, _ = await mutate_setup_group(session, group_id=int(raw_group), actor_id=callback.from_user.id, mutation=mutate)
+    group, _ = await mutate_setup_group(
+        session,
+        group_id=int(raw_group),
+        actor_id=callback.from_user.id,
+        mutation=mutate,
+    )
     if not group:
         await callback.answer("Нет доступа.", show_alert=True)
         return
@@ -250,7 +273,12 @@ async def choose_quarantine(callback: CallbackQuery, session: AsyncSession) -> N
     def mutate(group: Group) -> None:
         group.settings.newcomer_quarantine_enabled = value == "on"
 
-    group, _ = await mutate_setup_group(session, group_id=int(raw_group), actor_id=callback.from_user.id, mutation=mutate)
+    group, _ = await mutate_setup_group(
+        session,
+        group_id=int(raw_group),
+        actor_id=callback.from_user.id,
+        mutation=mutate,
+    )
     if not group:
         await callback.answer("Нет доступа.", show_alert=True)
         return
@@ -271,7 +299,12 @@ async def choose_reports(callback: CallbackQuery, session: AsyncSession) -> None
         group.settings.reports_enabled = wants_reports and available
         return available
 
-    group, available = await mutate_setup_group(session, group_id=int(raw_group), actor_id=callback.from_user.id, mutation=mutate)
+    group, available = await mutate_setup_group(
+        session,
+        group_id=int(raw_group),
+        actor_id=callback.from_user.id,
+        mutation=mutate,
+    )
     if not group or available is None:
         await callback.answer("Нет доступа.", show_alert=True)
         return
