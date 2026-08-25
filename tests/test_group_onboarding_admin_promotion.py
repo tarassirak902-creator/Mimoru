@@ -26,4 +26,5 @@ def test_admin_promotion_rights_cover_mimoru_group_actions() -> None:
         "restrict_members",
         "invite_users",
         "pin_messages",
+        "promote_members",
     }
