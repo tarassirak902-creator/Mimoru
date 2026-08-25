@@ -188,22 +188,20 @@ async def _run_claimed_auto_activity(
     if not member_ids:
         return
 
-    # --- Phase 2: Pick target via Telegram API (NO connection held) ---
-    # Load full member objects for _pick_target with per-member sessions
-    members = []
-    for mid in member_ids:
-        async with SessionFactory() as session:
-            member = await session.get(GroupMember, mid)
-            if member is not None:
-                members.append(member)
+    # --- Phase 2: Load candidates in one short DB query, then release connection ---
+    async with SessionFactory() as session:
+        members = list((await session.scalars(
+            select(GroupMember).where(GroupMember.id.in_(member_ids))
+        )).all())
     if not members:
         return
 
+    # --- Phase 3: Pick target via Telegram API (NO connection held) ---
     target = await _pick_target(bot, group_id, telegram_chat_id, members)
     if target is None:
         return
 
-    # --- Phase 3: Send message (NO connection held) ---
+    # --- Phase 4: Send message (NO connection held) ---
     action = random.choice(tuple(FUN_ACTIONS))
     target_name = _display_name(target)
     try:
@@ -212,7 +210,7 @@ async def _run_claimed_auto_activity(
         log.warning("fun_auto_send_failed", group_id=group_id, error=str(error))
         return
 
-    # --- Phase 4: Persist event under Group FOR UPDATE lock ---
+    # --- Phase 5: Persist event under Group FOR UPDATE lock ---
     async with SessionFactory() as session:
         group = await session.scalar(
             select(Group)
