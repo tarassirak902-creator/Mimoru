@@ -5,7 +5,14 @@ import re
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    ChatMemberUpdated,
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,10 +38,20 @@ GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 ACTIVE_BOT_STATUSES = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
 INACTIVE_BOT_STATUSES = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
 START_GROUP_RE = re.compile(r"^/start(?:@\w+)?\s+group_(\d+)$", re.IGNORECASE)
+CONNECT_COMMAND = "подключить"
 
 # Legacy onboarding markers retained for compatibility tests/documentation:
 # import_existing_admin_ranks
 # setup_start_menu(group.id)
+
+
+def _connect_command_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="📋 подключить",
+            copy_text=CopyTextButton(text=CONNECT_COMMAND),
+        )
+    ]])
 
 
 def _private_setup_markup(bot_username: str, group_id: int) -> InlineKeyboardMarkup:
@@ -80,7 +97,12 @@ async def bot_group_membership_changed(event: ChatMemberUpdated, bot: Bot, sessi
         try:
             await bot.send_message(
                 event.chat.id,
-                "👋 Mimoru получила права администратора.\n\nЧтобы подключить группу, её владелец должен написать здесь:\n\nподключить\n\nПосле подключения настройка и согласование администрации продолжатся в личном диалоге с Mimoru.",
+                "👋 Mimoru готова к подключению группы.\n\n"
+                "1️⃣ Убедитесь, что Mimoru назначена администратором.\n"
+                "2️⃣ Владелец группы должен отправить команду «подключить».\n"
+                "3️⃣ После подключения дальнейшая настройка продолжится в личном диалоге с Mimoru.\n\n"
+                "Нажмите кнопку ниже — слово «подключить» скопируется в буфер обмена. Затем вставьте его в чат и отправьте.",
+                reply_markup=_connect_command_markup(),
             )
         except (TelegramBadRequest, TelegramForbiddenError):
             pass
@@ -89,8 +111,10 @@ async def bot_group_membership_changed(event: ChatMemberUpdated, bot: Bot, sessi
         try:
             await bot.send_message(
                 event.chat.id,
-                "👋 Mimoru добавлена в группу, но пока без прав администратора.\n\n"
-                "Сначала назначьте Mimoru администратором. После этого владелец группы сможет написать «подключить»."
+                "👋 Mimoru добавлена в группу.\n\n"
+                "Для подключения сначала назначьте Mimoru администратором. После этого владелец группы должен отправить команду «подключить».\n\n"
+                "Команду можно заранее скопировать кнопкой ниже.",
+                reply_markup=_connect_command_markup(),
             )
         except (TelegramBadRequest, TelegramForbiddenError):
             pass
@@ -176,7 +200,7 @@ async def disconnect_group_crash_safe(
     await callback.answer(answer)
 
 
-@router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold() == "подключить")
+@router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold() == CONNECT_COMMAND)
 async def connect_group_private_first(message: Message, bot: Bot, session: AsyncSession) -> None:
     if message.from_user is None:
         return
