@@ -15,8 +15,10 @@ def test_direct_warn_mute_ban_use_single_configurable_entrypoint() -> None:
     disable = main.split("def _disable_legacy_direct_moderation_handlers", 1)[1].split(
         "class PlainTextBot", 1
     )[0]
+    assert '"moderation_reason_entry"' in disable
     assert '"direct_reply_moderation"' in disable
     assert '"durable_direct_reply"' in disable
+    assert "kick_retirement.router" in disable
     assert "group_commands.router.message.handlers[:]" not in disable
     assert "legacy_router.message.handlers[:]" in disable
     assert "_disable_legacy_direct_moderation_handlers()" in main.split("async def main()", 1)[1]
