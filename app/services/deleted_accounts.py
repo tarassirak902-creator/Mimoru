@@ -23,10 +23,13 @@ async def track_group_member(
     *,
     present: bool = True,
     checked: bool = False,
+    ensure_user: bool = True,
+    return_row: bool = True,
 ) -> GroupMember | None:
     if tg_user is None:
         return None
-    await upsert_user(session, tg_user)
+    if ensure_user:
+        await upsert_user(session, tg_user)
     now = datetime.now(timezone.utc)
     stmt = pg_insert(GroupMember).values(
         group_id=group_id,
@@ -48,6 +51,8 @@ async def track_group_member(
     )
     await session.execute(stmt)
     await session.flush()
+    if not return_row:
+        return None
     return await session.scalar(
         select(GroupMember).where(
             GroupMember.group_id == group_id,
