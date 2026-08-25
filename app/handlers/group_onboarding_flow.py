@@ -45,6 +45,7 @@ ADMIN_PROMOTION_RIGHTS = (
     "restrict_members",
     "invite_users",
     "pin_messages",
+    "promote_members",
 )
 
 # Legacy onboarding markers retained for compatibility tests/documentation:
