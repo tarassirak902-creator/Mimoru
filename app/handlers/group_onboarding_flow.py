@@ -97,7 +97,7 @@ async def bot_group_membership_changed(event: ChatMemberUpdated, bot: Bot, sessi
         try:
             await bot.send_message(
                 event.chat.id,
-                "👋 Mimoru готова к подключению группы.\n\n"
+                "👋 Mimoru получила права администратора и готова к подключению группы.\n\n"
                 "1️⃣ Убедитесь, что Mimoru назначена администратором.\n"
                 "2️⃣ Владелец группы должен отправить команду «подключить».\n"
                 "3️⃣ После подключения дальнейшая настройка продолжится в личном диалоге с Mimoru.\n\n"
@@ -111,7 +111,7 @@ async def bot_group_membership_changed(event: ChatMemberUpdated, bot: Bot, sessi
         try:
             await bot.send_message(
                 event.chat.id,
-                "👋 Mimoru добавлена в группу.\n\n"
+                "👋 Mimoru добавлена в группу, но пока без прав администратора.\n\n"
                 "Для подключения сначала назначьте Mimoru администратором. После этого владелец группы должен отправить команду «подключить».\n\n"
                 "Команду можно заранее скопировать кнопкой ниже.",
                 reply_markup=_connect_command_markup(),
@@ -200,7 +200,7 @@ async def disconnect_group_crash_safe(
     await callback.answer(answer)
 
 
-@router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold() == CONNECT_COMMAND)
+@router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold() == "подключить")
 async def connect_group_private_first(message: Message, bot: Bot, session: AsyncSession) -> None:
     if message.from_user is None:
         return
