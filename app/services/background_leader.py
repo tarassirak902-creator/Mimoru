@@ -243,7 +243,7 @@ async def _recover_moderation_operations_periodically(bot: Bot, local_stop: asyn
 async def _run_leader_worker(bot: Bot, redis: Redis, local_stop: asyncio.Event) -> None:
     """Recover durable external-side-effect intents before normal scheduled work."""
     from app.services.group_disconnects import recover_group_disconnects
-    from app.tasks_delivery import background_loop
+    from app.tasks_scheduler import background_loop
 
     await recover_group_disconnects(bot)
     disconnect_recovery = asyncio.create_task(
