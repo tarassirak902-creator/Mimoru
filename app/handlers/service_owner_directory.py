@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import csv
 import io
 
 from aiogram import Bot, F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +39,10 @@ def _plan_label(group: Group) -> str:
     if state == "expired":
         return "⌛ истёк"
     return "🆓 FREE"
+
+
+def _format_dt(value) -> str:
+    return value.strftime("%d.%m.%Y %H:%M") if value else ""
 
 
 async def _owner_exists(session: AsyncSession, telegram_id: int) -> bool:
@@ -145,7 +151,7 @@ async def _render_owner_group(
     days = remaining_days(group)
     expires = group.plan_expires_at.strftime("%d.%m.%Y %H:%M UTC") if group.plan_expires_at else "без срока"
     rows = [
-        [InlineKeyboardButton(text="📥 Скачать пользователей CSV", callback_data=f"owner_export:{owner_id}:{group.id}")],
+        [InlineKeyboardButton(text="📥 Скачать пользователей Excel", callback_data=f"owner_export:{owner_id}:{group.id}")],
         [
             InlineKeyboardButton(text="🩺 Проверить Telegram", callback_data=f"owner_health:{owner_id}:{group.id}"),
             InlineKeyboardButton(text="📊 Статистика", callback_data=f"owner_stats:{owner_id}:{group.id}"),
@@ -164,7 +170,7 @@ async def _render_owner_group(
     )
     if days is not None:
         text += f"\nОсталось дней: {days}"
-    text += "\n\nCSV содержит всех известных Mimoru пользователей этой группы и их текущий статус."
+    text += "\n\nExcel содержит всех известных Mimoru пользователей этой группы и их текущий статус."
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -211,9 +217,11 @@ async def export_group_users(callback: CallbackQuery, session: AsyncSession) -> 
         .where(GroupMember.group_id == group.id)
         .order_by(GroupMember.is_present.desc(), GroupMember.last_seen_at.desc())
     )).all()
-    output = io.StringIO(newline="")
-    writer = csv.writer(output)
-    writer.writerow([
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Пользователи"
+    headers = [
         "Telegram ID",
         "Имя пользователя",
         "Имя",
@@ -221,29 +229,49 @@ async def export_group_users(callback: CallbackQuery, session: AsyncSession) -> 
         "Статус",
         "Дата вступления",
         "Последняя активность",
-    ])
+    ]
+    sheet.append(headers)
+
     for member, user in records:
         status = (
             "Удалённый аккаунт"
             if member.is_deleted_account
             else ("В группе" if member.is_present else "Вышел из группы")
         )
-        writer.writerow([
+        sheet.append([
             member.user_telegram_id,
             f"@{user.username}" if user and user.username else "",
             user.first_name if user else "",
             user.last_name if user and user.last_name else "",
             status,
-            member.joined_at.isoformat() if member.joined_at else "",
-            member.last_seen_at.isoformat() if member.last_seen_at else "",
+            _format_dt(member.joined_at),
+            _format_dt(member.last_seen_at),
         ])
-    data = ("\ufeff" + output.getvalue()).encode("utf-8")
-    filename = f"mimoru_group_{group.id}_users.csv"
+
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.row_dimensions[1].height = 22
+
+    for column_cells in sheet.columns:
+        column_index = column_cells[0].column
+        max_length = max(len(str(cell.value or "")) for cell in column_cells)
+        sheet.column_dimensions[get_column_letter(column_index)].width = min(max(max_length + 3, 12), 38)
+        for cell in column_cells[1:]:
+            cell.alignment = Alignment(vertical="center")
+
+    output = io.BytesIO()
+    workbook.save(output)
+    data = output.getvalue()
+    filename = f"mimoru_group_{group.id}_users.xlsx"
     await callback.message.answer_document(
         BufferedInputFile(data, filename=filename),
         caption=f"Пользователи группы «{group.title}». Записей: {len(records)}.",
     )
-    await callback.answer("CSV готов")
+    await callback.answer("Excel готов")
 
 
 @router.callback_query(F.data.regexp(r"^owner_health:\d+:\d+$"))
@@ -296,7 +324,7 @@ async def owner_group_stats(callback: CallbackQuery, session: AsyncSession) -> N
         panel_header("Пользователи группы", group.title)
         + f"\n\nСейчас в базе: {current_members}\nВсего известных Mimoru: {known_members}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📥 Скачать пользователей CSV", callback_data=f"owner_export:{owner_id}:{group.id}")],
+            [InlineKeyboardButton(text="📥 Скачать пользователей Excel", callback_data=f"owner_export:{owner_id}:{group.id}")],
             [InlineKeyboardButton(text="◀️ К группе", callback_data=f"owner_group:{owner_id}:{group.id}")],
         ]),
     )
