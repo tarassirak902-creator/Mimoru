@@ -11,17 +11,15 @@ def _source(path: str) -> str:
 def test_direct_warn_mute_ban_use_single_configurable_entrypoint() -> None:
     main = _source("app/main.py")
     modes = _source("app/handlers/moderation_command_modes.py")
+    kick_retirement = _source("app/handlers/kick_retirement.py")
+    group_commands = _source("app/handlers/group_commands.py")
+    durable_guard = _source("app/handlers/moderation_durable_guard.py")
 
-    disable = main.split("def _disable_legacy_direct_moderation_handlers", 1)[1].split(
-        "class PlainTextBot", 1
-    )[0]
-    assert '"moderation_reason_entry"' in disable
-    assert '"direct_reply_moderation"' in disable
-    assert '"durable_direct_reply"' in disable
-    assert "kick_retirement.router" in disable
-    assert "group_commands.router.message.handlers[:]" not in disable
-    assert "legacy_router.message.handlers[:]" in disable
-    assert "_disable_legacy_direct_moderation_handlers()" in main.split("async def main()", 1)[1]
+    assert "_disable_legacy_direct_moderation_handlers" not in main
+    assert "moderation_reason_entry" not in kick_retirement
+    assert "direct_reply_moderation" not in group_commands
+    assert "durable_direct_reply" not in durable_guard
+    assert "DIRECT_MODERATION_RE" not in group_commands
 
     assert "async def moderation_command_mode" in modes
     handler = modes.split("async def moderation_command_mode", 1)[1]
@@ -29,6 +27,7 @@ def test_direct_warn_mute_ban_use_single_configurable_entrypoint() -> None:
     assert 'mode in {"text", "both"}' in handler
     assert "await _open_buttons(" in handler
     assert "await execute(" in handler
+    assert handler.index("if use_direct:") < handler.index("await _open_buttons(")
 
 
 def test_existing_unmanaged_telegram_admin_is_attached_without_promote_rewrite() -> None:
