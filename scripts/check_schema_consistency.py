@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from app.db.base import Base
 import app.db.ad_market_models  # noqa: F401
+import app.db.moderation_command_models  # noqa: F401
 import app.db.moderation_operation_models  # noqa: F401
 import app.db.payment_refund_models  # noqa: F401
 import app.db.broadcast_models  # noqa: F401  # registers broadcast delivery ORM models
