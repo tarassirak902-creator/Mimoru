@@ -107,6 +107,10 @@ def test_processing_transition_is_durable_after_group_lock_before_send() -> None
 
 
 def test_leader_runs_hardened_delivery_scheduler() -> None:
-    source = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
-    assert "from app.tasks_delivery import background_loop" in source
-    assert "from app.tasks import background_loop" not in source
+    leader = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
+    scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
+    assert "from app.tasks_scheduler import background_loop" in leader
+    assert "from app.tasks_delivery import send_scheduled_messages" in scheduler
+    assert "from app.tasks_delivery import (" in scheduler
+    assert "send_daily_reports," in scheduler
+    assert "send_subscription_notices," in scheduler
