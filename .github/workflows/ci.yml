@@ -8,6 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      BOT_TOKEN: "123456789:ci_test_token_abcdefghijklmnopqrstuvwxyz"
+      DATABASE_URL: "postgresql+asyncpg://moderator:moderator@localhost:5432/moderator"
+      REDIS_URL: "redis://localhost:6379/0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
