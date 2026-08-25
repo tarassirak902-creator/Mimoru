@@ -8,21 +8,25 @@ def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_direct_warn_mute_ban_are_intercepted_before_legacy_execution() -> None:
+def test_direct_warn_mute_ban_use_single_configurable_entrypoint() -> None:
     main = _source("app/main.py")
-    guard = _source("app/handlers/kick_retirement.py")
+    modes = _source("app/handlers/moderation_command_modes.py")
 
-    assert main.index("kick_retirement.router") < main.index("moderation_durable_guard.router")
-    assert 'F.text.regexp(r"(?i)^(?:пред|мут|бан)(?:\\s|$)")' in guard
-    handler = guard.split("async def moderation_reason_entry", 1)[1].split(
-        "@router.callback_query", 1
+    disable = main.split("def _disable_legacy_direct_moderation_handlers", 1)[1].split(
+        "class PlainTextBot", 1
     )[0]
-    assert "parse_command" in handler
-    assert "await redis.setex" in handler
-    assert "moderation_duration_picker" in handler
-    assert "await active_reasons" in handler
-    assert "moderation_reason_picker" in handler
-    assert "execute(" not in handler
+    assert '"direct_reply_moderation"' in disable
+    assert '"durable_direct_reply"' in disable
+    assert "group_commands.router.message.handlers[:]" not in disable
+    assert "legacy_router.message.handlers[:]" in disable
+    assert "_disable_legacy_direct_moderation_handlers()" in main.split("async def main()", 1)[1]
+
+    assert "async def moderation_command_mode" in modes
+    handler = modes.split("async def moderation_command_mode", 1)[1]
+    assert "second_line_reason" in handler
+    assert 'mode in {"text", "both"}' in handler
+    assert "await _open_buttons(" in handler
+    assert "await execute(" in handler
 
 
 def test_existing_unmanaged_telegram_admin_is_attached_without_promote_rewrite() -> None:
