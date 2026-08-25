@@ -4,25 +4,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_help_sanitizes_actual_home_panel_winner_and_legacy_panel():
+def test_runtime_help_sanitizes_legacy_panel_only_when_needed():
     retirement = (ROOT / "app/handlers/kick_retirement.py").read_text(encoding="utf-8")
     main = (ROOT / "app/main.py").read_text(encoding="utf-8")
     home = (ROOT / "app/handlers/home_panel.py").read_text(encoding="utf-8")
+    common = (ROOT / "app/handlers/common.py").read_text(encoding="utf-8")
 
-    assert '"app.handlers.home_panel"' in retirement
-    assert '"HELP_TEXT"' in retirement
-    assert '("пред, мут 2ч, кик или бан.", "пред, мут 2ч или бан.")' in retirement
+    # Current user-facing help is correct in source and does not rely on import
+    # order or runtime monkey-patching.
+    assert "пред, мут 2ч, кик или бан." not in home
+    assert "пред, мут 2ч, кик или бан." not in common
+    assert "пред, мут 2ч или бан." in home
+    assert "пред, мут 2ч или бан." in common
+
+    # The legacy panel is still sanitized for old/secondary handler paths.
     assert '"app.handlers.panel"' in retirement
     assert '"COMMANDS_TEXT"' in retirement
 
     # The guided home handler is the actual first panel:commands winner.
     assert 'F.data == "panel:commands"' in home
     assert main.index("\n        home_panel.router,") < main.index("\n        panel.router,")
-
-    # Both help modules are imported before kick_retirement performs the sanitization.
-    retirement_import = main.index("from app.handlers import kick_retirement")
-    assert main.index("home_panel") < retirement_import
-    assert main.index(", panel, permission_modes") < retirement_import
 
 
 def test_public_command_reference_does_not_advertise_kick():
