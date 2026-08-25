@@ -32,19 +32,12 @@ def _replace_loaded_text(module_name: str, attribute: str, replacements: tuple[t
     setattr(module, attribute, text)
 
 
-def _retire_kick_from_loaded_help() -> None:
-    """Remove stale kick instructions from all help modules loaded by `app.main`.
+def _retire_kick_from_legacy_help() -> None:
+    """Remove kick instructions from the legacy secondary panel help.
 
-    `home_panel` owns the first `panel:commands` callback and the legacy `panel` module
-    remains registered later. Both modules are imported before this retirement module.
-    Access them through `sys.modules` so standalone imports do not initialize runtime
-    settings merely to load the kick guard.
+    The active guided help is correct directly in source. Only the older panel
+    module still needs compatibility sanitization while it remains registered.
     """
-    _replace_loaded_text(
-        "app.handlers.home_panel",
-        "HELP_TEXT",
-        (("пред, мут 2ч, кик или бан.", "пред, мут 2ч или бан."),),
-    )
     _replace_loaded_text(
         "app.handlers.panel",
         "COMMANDS_TEXT",
@@ -61,7 +54,7 @@ def _retire_kick_from_loaded_help() -> None:
     )
 
 
-_retire_kick_from_loaded_help()
+_retire_kick_from_legacy_help()
 
 
 @router.message(
