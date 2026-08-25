@@ -57,6 +57,8 @@ async def _cancel_callback(
     user_id = state_data.get("user_id")
     reason_id = state_data.get("reason_id")
     ticket_id = state_data.get("ticket_id")
+    item_id = state_data.get("item_id")
+    listing_id = state_data.get("listing_id")
 
     if name.endswith(":support_new"):
         return "panel:support"
@@ -78,6 +80,16 @@ async def _cancel_callback(
         return f"reasons:{group_id}"
     if name.endswith(":renaming") and isinstance(group_id, int) and isinstance(reason_id, int):
         return f"reason_edit:{group_id}:{reason_id}"
+
+    # Advertising editor forms keep their logical parent in state data.  These
+    # forms used to fall through to panel:home, so pressing "Отменить ввод"
+    # unexpectedly threw the user out of the editor.
+    if name.startswith("GlobalPostForm:") and isinstance(item_id, int):
+        return f"gpost:editor:{item_id}"
+    if name.startswith("RequiredListingForm:") and isinstance(group_id, int):
+        return f"reqlist:group:{group_id}"
+    if name.startswith("RequiredDealForm:") and isinstance(listing_id, int):
+        return f"reqmarket:{listing_id}"
 
     if isinstance(group_id, int):
         return f"group:{group_id}"
@@ -178,6 +190,19 @@ class DatabaseMiddleware(BaseMiddleware):
                     state_before = await state.get_state()
                     if state_before:
                         state_data_before = await state.get_data()
+
+                # A cancel button attached to an active text/photo form is a
+                # navigation action, not merely another callback. Clear the FSM
+                # before dispatching its target callback so the requested
+                # parent screen is restored and the next user message cannot be
+                # consumed by the cancelled form.
+                if (
+                    isinstance(state, FSMContext)
+                    and state_before
+                    and isinstance(event, CallbackQuery)
+                    and _callback_is_cancel_notice(event, state_data_before)
+                ):
+                    await state.clear()
 
                 result = await handler(event, data)
                 if session.in_transaction():
