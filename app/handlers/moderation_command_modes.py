@@ -120,7 +120,7 @@ async def _render_mode(callback: CallbackQuery, session: AsyncSession, group: Gr
     text = panel_header(
         "Режим админ-команд",
         "Выберите, как работают команды пред / мут / бан.\n\n"
-        "🔘 Кнопки — укажите пользователя ответом, @username или Telegram ID; Mimoru предложит срок/причину кнопками.\n\n"
+        "🔘 Кнопки — если причина не указана текстом, Mimoru предложит срок/причину кнопками. Явно написанная причина всегда имеет приоритет.\n\n"
         "📝 Текстовый — причина пишется со второй строки, и действие выполняется сразу без кнопок.\n\n"
         "✅ Оба режима — если есть причина со второй строки, действие выполняется сразу; если её нет, открываются кнопки.",
     )
@@ -314,7 +314,10 @@ async def moderation_command_mode(
     mode = pref.mode
     await session.commit()
 
-    use_direct = bool(direct_reason) and mode in {"text", "both"}
+    # An explicit second-line reason is an unambiguous moderator instruction.
+    # Honor it before any button-mode fallback so stale/ambiguous mode settings
+    # cannot discard a reason the moderator has already typed.
+    use_direct = bool(direct_reason)
     if mode == "text" and not direct_reason:
         await message.reply(
             "Включён текстовый режим. Причину напишите со второй строки.\n\n"
