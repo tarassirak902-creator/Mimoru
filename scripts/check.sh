@@ -11,6 +11,7 @@ python scripts/check_security_baseline.py
 python scripts/check_operational_resilience.py
 python scripts/check_functionality_surface.py
 python scripts/check_callback_coverage.py
+python scripts/check_release_consistency.py
 python scripts/audit_navigation_buttons.py
 python scripts/audit_all_buttons.py
 python scripts/audit_fsm_states.py
