@@ -20,6 +20,8 @@ fi
 echo "==> Получение изменений из GitHub..."
 git fetch origin main
 git pull --ff-only origin main
+DEPLOY_SHA="$(git rev-parse --short HEAD)"
+echo "==> Версия для деплоя: $DEPLOY_SHA"
 
 echo "==> Проверка docker-compose.yml..."
 docker compose config -q
@@ -27,11 +29,18 @@ docker compose config -q
 echo "==> Запуск PostgreSQL и Redis..."
 docker compose up -d postgres redis
 
-echo "==> Сборка новой версии бота..."
-docker compose build bot
+echo "==> Сборка новой версии бота без старого кэша..."
+docker compose build --no-cache bot
 
-echo "==> Перезапуск бота и backup-сервиса..."
-docker compose up -d bot backup
+echo "==> Принудительное пересоздание бота и запуск backup-сервиса..."
+docker compose up -d --force-recreate bot
+docker compose up -d backup
+
+echo "==> Проверка кода внутри запущенного контейнера..."
+if ! docker compose exec -T bot python -c 'from app.handlers.moderation_command_modes import _split_command; assert _split_command("Пред\nВ") == ("пред", [], "В")'; then
+  echo "ОШИБКА: контейнер bot запущен не с ожидаемым обработчиком многострочной причины."
+  exit 1
+fi
 
 echo "==> Ожидание готовности бота..."
 BOT_ID="$(docker compose ps -q bot)"
@@ -65,7 +74,7 @@ if [[ "$READY" -ne 1 ]]; then
   exit 1
 fi
 
-echo "==> Деплой завершён успешно."
+echo "==> Деплой завершён успешно: $DEPLOY_SHA"
 docker compose ps
 echo "==> Последние логи бота:"
 docker compose logs --tail=60 bot
