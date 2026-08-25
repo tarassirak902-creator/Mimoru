@@ -24,26 +24,29 @@ def test_mute_keeps_target_and_duration_on_first_line() -> None:
     assert reason == "Флуд"
 
 
-def test_mute_accepts_spaced_one_minute_duration() -> None:
-    command, args, reason = _split_command("Мут 1 мин")
-    assert command == "мут"
-    assert args == ["1мин"]
-    assert reason == ""
-    assert parse_duration(args[0]) == 60
-    assert _structural_args_only(_message(reply=True), args) == ["1мин"]
+def test_mute_accepts_one_minute_duration_variants() -> None:
+    for text in ("Мут 1м", "Мут 1 мин", "Мут 1 минуту"):
+        command, args, reason = _split_command(text)
+        assert command == "мут"
+        assert len(args) == 1
+        assert parse_duration(args[0]) == 60
+        assert reason == ""
+        assert _structural_args_only(_message(reply=True), args) == args
 
 
 def test_mute_accepts_spaced_duration_with_target_and_reason() -> None:
-    command, args, reason = _split_command("Мут @user 1 мин\nФлуд")
-    assert command == "мут"
-    assert args == ["@user", "1мин"]
-    assert reason == "Флуд"
-    assert _structural_args_only(_message(reply=False), args) == ["@user", "1мин"]
+    for text in ("Мут @user 1 мин\nФлуд", "Мут @user 1 минуту\nФлуд"):
+        command, args, reason = _split_command(text)
+        assert command == "мут"
+        assert args == ["@user", "1мин"]
+        assert reason == "Флуд"
+        assert _structural_args_only(_message(reply=False), args) == ["@user", "1мин"]
 
 
 def test_mute_accepts_natural_russian_duration_words() -> None:
     for text, expected in (
         ("Мут 1 минута", "1мин"),
+        ("Мут 1 минуту", "1мин"),
         ("Мут 2 минуты", "2мин"),
         ("Мут 5 минут", "5мин"),
         ("Мут 2 часа", "2час"),
