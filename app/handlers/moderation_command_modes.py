@@ -32,6 +32,32 @@ MODE_LABELS = {
     "text": "📝 Текстовый",
     "both": "✅ Оба режима",
 }
+_DURATION_UNIT_ALIASES = {
+    "с": "с",
+    "сек": "сек",
+    "секунда": "сек",
+    "секунды": "сек",
+    "секунд": "сек",
+    "м": "м",
+    "мин": "мин",
+    "минута": "мин",
+    "минуты": "мин",
+    "минут": "мин",
+    "ч": "ч",
+    "час": "час",
+    "часа": "час",
+    "часов": "час",
+    "д": "д",
+    "дн": "дн",
+    "день": "дн",
+    "дня": "дн",
+    "дней": "дн",
+    "н": "н",
+    "нед": "нед",
+    "неделя": "нед",
+    "недели": "нед",
+    "недель": "нед",
+}
 
 
 class ModerationCommandModeFilter(BaseFilter):
@@ -123,7 +149,7 @@ async def _render_mode(callback: CallbackQuery, session: AsyncSession, group: Gr
         "🔘 Кнопки — Mimoru всегда предложит срок/причину кнопками.\n\n"
         "📝 Текстовый — причина принимается только со второй строки; действие выполняется сразу без кнопок.\n\n"
         "✅ Оба режима — если во второй строке есть причина, действие выполняется сразу; если второй строки с причиной нет, открываются кнопки.\n\n"
-        "В первой строке можно указывать только команду, пользователя и срок, например: мут @user 2ч.",
+        "В первой строке можно указывать только команду, пользователя и срок, например: мут @user 2ч или мут @user 1 мин.",
     )
     await callback.message.edit_text(text, reply_markup=_mode_keyboard(group.id, pref.mode))
 
@@ -162,6 +188,23 @@ async def _username_target(session: AsyncSession, group_id: int, raw: str) -> in
     )
 
 
+def _normalize_duration_args(args: list[str]) -> list[str]:
+    """Normalize both compact and spaced durations, e.g. 1мин and 1 мин."""
+    normalized: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token.isdigit() and index + 1 < len(args):
+            unit = _DURATION_UNIT_ALIASES.get(args[index + 1].casefold())
+            if unit is not None:
+                normalized.append(f"{token}{unit}")
+                index += 2
+                continue
+        normalized.append(token)
+        index += 1
+    return normalized
+
+
 def _split_command(text: str) -> tuple[str, list[str], str]:
     lines = text.splitlines()
     if not lines:
@@ -172,7 +215,7 @@ def _split_command(text: str) -> tuple[str, list[str], str]:
         return "", [], "\n".join(lines[1:]).strip()
     command = parts[0].casefold()
     reason = "\n".join(lines[1:]).strip()
-    return command, parts[1:], reason
+    return command, _normalize_duration_args(parts[1:]), reason
 
 
 def _structural_args_only(message: Message, args: list[str]) -> list[str]:
