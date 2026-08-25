@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.db.base import Base
 import app.db.ad_market_models  # noqa: F401
+import app.db.moderation_command_models  # noqa: F401
 import app.db.moderation_operation_models  # noqa: F401
 import app.db.payment_refund_models  # noqa: F401
 from app.db import broadcast_models  # noqa: F401
