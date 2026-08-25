@@ -19,21 +19,21 @@ def test_moderation_intent_schema_is_durable_and_unique_per_target() -> None:
     assert "checkfirst=True" in schema
 
 
-def test_guard_keeps_non_conflicting_production_entries_and_direct_commands_are_retired() -> None:
+def test_guard_keeps_non_conflicting_production_entries_and_direct_commands_are_removed() -> None:
     main = _source("app/main.py")
-    disable = main.split("def _disable_legacy_direct_moderation_handlers", 1)[1].split(
-        "class PlainTextBot", 1
-    )[0]
-    assert '"direct_reply_moderation"' in disable
-    assert '"durable_direct_reply"' in disable
-    assert "_disable_legacy_direct_moderation_handlers()" in main.split("async def main()", 1)[1]
-
     guard = _source("app/handlers/moderation_durable_guard.py")
+    group_commands = _source("app/handlers/group_commands.py")
+    kick_retirement = _source("app/handlers/kick_retirement.py")
+
+    assert "_disable_legacy_direct_moderation_handlers" not in main
+    assert "async def durable_direct_reply" not in guard
+    assert "async def direct_reply_moderation" not in group_commands
+    assert "async def moderation_reason_entry" not in kick_retirement
+
     assert r"^modreason:[0-9a-f]{10}:\d+$" in guard
     assert 'F.text.casefold() == "говори"' in guard
     assert 'F.text.casefold().startswith("разбан ")' in guard
     assert r"^member_action:\d+:-?\d+:(unmute|unban)$" in guard
-    assert "async def durable_direct_reply" in guard
 
 
 def test_guard_authorizes_and_snapshots_before_committing_mutation_intent() -> None:
@@ -63,9 +63,6 @@ def test_guard_commits_intent_before_delegating_existing_hardened_logic() -> Non
     reason = guard.split("async def durable_reason_action", 1)[1].split(
         "async def durable_reply_unmute", 1
     )[0]
-    reply = guard.split("async def durable_direct_reply", 1)[1].split(
-        "async def durable_unban_by_username", 1
-    )[0]
     unban = guard.split("async def durable_unban_by_username", 1)[1].split(
         "async def durable_member_release", 1
     )[0]
@@ -73,9 +70,6 @@ def test_guard_commits_intent_before_delegating_existing_hardened_logic() -> Non
 
     assert reason.index("await _create_guard_intent(") < reason.rindex(
         "await reason_admin.moderation_reason_selected"
-    )
-    assert reply.index("await _create_guard_intent(") < reply.rindex(
-        "await group_commands.direct_reply_moderation"
     )
     assert unban.index("await _create_guard_intent(") < unban.rindex(
         "await group_commands._do_unban"
