@@ -121,8 +121,9 @@ async def _render_mode(callback: CallbackQuery, session: AsyncSession, group: Gr
         "Режим админ-команд",
         "Выберите, как работают команды пред / мут / бан.\n\n"
         "🔘 Кнопки — Mimoru всегда предложит срок/причину кнопками.\n\n"
-        "📝 Текстовый — причину можно написать со второй строки или после пользователя/срока; действие выполняется сразу без кнопок.\n\n"
-        "✅ Оба режима — если причина написана текстом, действие выполняется сразу; если причины нет, открываются кнопки.",
+        "📝 Текстовый — причина принимается только со второй строки; действие выполняется сразу без кнопок.\n\n"
+        "✅ Оба режима — если во второй строке есть причина, действие выполняется сразу; если второй строки с причиной нет, открываются кнопки.\n\n"
+        "В первой строке можно указывать только команду, пользователя и срок, например: мут @user 2ч.",
     )
     await callback.message.edit_text(text, reply_markup=_mode_keyboard(group.id, pref.mode))
 
@@ -174,21 +175,15 @@ def _split_command(text: str) -> tuple[str, list[str], str]:
     return command, parts[1:], reason
 
 
-def _split_structural_args_and_inline_reason(
-    message: Message,
-    args: list[str],
-) -> tuple[list[str], str]:
-    """Separate target/duration tokens from a reason written on the first line.
+def _structural_args_only(message: Message, args: list[str]) -> list[str]:
+    """Keep only target and duration tokens from the first line.
 
-    Examples:
-      reply + `пред неадекват` -> [] / `неадекват`
-      `пред @user неадекват` -> [`@user`] / `неадекват`
-      `мут @user 2ч флуд` -> [`@user`, `2ч`] / `флуд`
+    A moderation reason is never read from the first line. Any other words there
+    are ignored for reason selection; in combined mode this therefore falls back
+    to the configured reason buttons unless a second-line reason is present.
     """
     structural: list[str] = []
-    reason_parts: list[str] = []
-    reply_target = bool(message.reply_to_message and message.reply_to_message.from_user)
-    target_seen = reply_target
+    target_seen = bool(message.reply_to_message and message.reply_to_message.from_user)
     duration_seen = False
 
     for token in args:
@@ -199,10 +194,8 @@ def _split_structural_args_and_inline_reason(
         if not target_seen and (token.isdigit() or token.startswith("@")):
             structural.append(token)
             target_seen = True
-            continue
-        reason_parts.append(token)
 
-    return structural, " ".join(reason_parts).strip()
+    return structural
 
 
 async def _parse_target_and_duration(
@@ -329,9 +322,7 @@ async def moderation_command_mode(
         await message.reply("У вас нет права выполнять эту команду.")
         return
 
-    structural_args, inline_reason = _split_structural_args_and_inline_reason(message, raw_args)
-    direct_reason = second_line_reason or inline_reason
-
+    structural_args = _structural_args_only(message, raw_args)
     target_id, duration, error = await _parse_target_and_duration(
         session, group, message, structural_args
     )
@@ -351,13 +342,13 @@ async def moderation_command_mode(
     mode = pref.mode
     await session.commit()
 
-    use_direct = mode in {"text", "both"} and bool(direct_reason)
-    if mode == "text" and not direct_reason:
+    use_direct = mode in {"text", "both"} and bool(second_line_reason)
+    if mode == "text" and not second_line_reason:
         await message.reply(
-            "Включён текстовый режим. Укажите причину текстом.\n\n"
+            "Включён текстовый режим. Причину напишите только со второй строки.\n\n"
             "Примеры:\n"
             "пред @username\nСпам\n\n"
-            "мут 123456 2ч Оскорбления\n\n"
+            "мут 123456 2ч\nОскорбления\n\n"
             "Или ответьте на сообщение:\nбан\nПовторное нарушение"
         )
         return
@@ -373,7 +364,7 @@ async def moderation_command_mode(
                 moderator_id=message.from_user.id,
                 action=action,
                 duration=duration,
-                reason=direct_reason[:1000],
+                reason=second_line_reason[:1000],
                 warnings_limit=group.settings.warnings_limit,
                 default_mute=group.settings.default_mute_seconds,
                 target_name=public_user_token(target_id),
