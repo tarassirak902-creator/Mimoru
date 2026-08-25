@@ -213,9 +213,21 @@ async def export_group_users(callback: CallbackQuery, session: AsyncSession) -> 
     )).all()
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["telegram_id", "username", "first_name", "last_name", "status", "joined_at", "last_seen_at"])
+    writer.writerow([
+        "Telegram ID",
+        "Имя пользователя",
+        "Имя",
+        "Фамилия",
+        "Статус",
+        "Дата вступления",
+        "Последняя активность",
+    ])
     for member, user in records:
-        status = "deleted" if member.is_deleted_account else ("present" if member.is_present else "left")
+        status = (
+            "Удалённый аккаунт"
+            if member.is_deleted_account
+            else ("В группе" if member.is_present else "Вышел из группы")
+        )
         writer.writerow([
             member.user_telegram_id,
             f"@{user.username}" if user and user.username else "",
