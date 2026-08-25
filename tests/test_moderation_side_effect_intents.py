@@ -19,19 +19,21 @@ def test_moderation_intent_schema_is_durable_and_unique_per_target() -> None:
     assert "checkfirst=True" in schema
 
 
-def test_guard_is_the_production_winner_for_all_external_moderation_entries() -> None:
+def test_guard_keeps_non_conflicting_production_entries_and_direct_commands_are_retired() -> None:
     main = _source("app/main.py")
-    guard_index = main.index("moderation_durable_guard.router")
-    assert guard_index < main.index("reason_admin.router")
-    assert guard_index < main.index("group_commands.router")
-    assert guard_index < main.index("member_center.router")
+    disable = main.split("def _disable_legacy_direct_moderation_handlers", 1)[1].split(
+        "class PlainTextBot", 1
+    )[0]
+    assert '"direct_reply_moderation"' in disable
+    assert '"durable_direct_reply"' in disable
+    assert "_disable_legacy_direct_moderation_handlers()" in main.split("async def main()", 1)[1]
 
     guard = _source("app/handlers/moderation_durable_guard.py")
     assert r"^modreason:[0-9a-f]{10}:\d+$" in guard
     assert 'F.text.casefold() == "говори"' in guard
-    assert "group_commands.DIRECT_MODERATION_RE" in guard
     assert 'F.text.casefold().startswith("разбан ")' in guard
     assert r"^member_action:\d+:-?\d+:(unmute|unban)$" in guard
+    assert "async def durable_direct_reply" in guard
 
 
 def test_guard_authorizes_and_snapshots_before_committing_mutation_intent() -> None:
