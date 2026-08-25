@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import re
 import secrets
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from redis.asyncio import Redis
 from sqlalchemy import func, select
@@ -26,13 +26,23 @@ from app.utils.duration import parse_duration
 
 router = Router(name=__name__)
 GROUP_TYPES = {"group", "supergroup"}
-COMMAND_RE = re.compile(r"(?is)^(пред|мут|бан)(?:\s|$)")
 VALID_MODES = {"buttons", "text", "both"}
 MODE_LABELS = {
     "buttons": "🔘 Кнопки",
     "text": "📝 Текстовый",
     "both": "✅ Оба режима",
 }
+
+
+class ModerationCommandModeFilter(BaseFilter):
+    """Match пред/мут/бан reliably, including commands with a second line."""
+
+    async def __call__(self, message: Message) -> bool:
+        text = (message.text or "").lstrip()
+        if not text:
+            return False
+        first_token = text.split(maxsplit=1)[0].casefold()
+        return first_token in {"пред", "мут", "бан"}
 
 
 async def _active_group(session: AsyncSession, chat_id: int) -> Group | None:
@@ -266,7 +276,7 @@ async def _open_buttons(
     )
 
 
-@router.message(F.chat.type.in_(GROUP_TYPES), F.text.regexp(COMMAND_RE))
+@router.message(F.chat.type.in_(GROUP_TYPES), ModerationCommandModeFilter())
 async def moderation_command_mode(
     message: Message,
     bot: Bot,
