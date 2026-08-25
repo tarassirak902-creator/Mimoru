@@ -35,6 +35,14 @@ def test_split_reply_style_direct_reason() -> None:
     assert reason == "Неадекват"
 
 
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\x85", "\u2028", "\u2029"])
+def test_split_reply_style_accepts_line_separators(separator: str) -> None:
+    command, args, reason = _split_command(f"Пред{separator}В")
+    assert command == "пред"
+    assert args == []
+    assert reason == "В"
+
+
 def test_split_target_duration_and_multiline_reason() -> None:
     command, args, reason = _split_command("мут @BLACK_SFB 2ч\nОскорбления\nПовторное нарушение")
     assert command == "мут"
