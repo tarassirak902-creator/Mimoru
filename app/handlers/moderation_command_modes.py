@@ -120,9 +120,9 @@ async def _render_mode(callback: CallbackQuery, session: AsyncSession, group: Gr
     text = panel_header(
         "Режим админ-команд",
         "Выберите, как работают команды пред / мут / бан.\n\n"
-        "🔘 Кнопки — если причина не указана текстом, Mimoru предложит срок/причину кнопками. Явно написанная причина всегда имеет приоритет.\n\n"
-        "📝 Текстовый — причина пишется со второй строки, и действие выполняется сразу без кнопок.\n\n"
-        "✅ Оба режима — если есть причина со второй строки, действие выполняется сразу; если её нет, открываются кнопки.",
+        "🔘 Кнопки — Mimoru всегда предложит срок/причину кнопками.\n\n"
+        "📝 Текстовый — причину можно написать со второй строки или после пользователя/срока; действие выполняется сразу без кнопок.\n\n"
+        "✅ Оба режима — если причина написана текстом, действие выполняется сразу; если причины нет, открываются кнопки.",
     )
     await callback.message.edit_text(text, reply_markup=_mode_keyboard(group.id, pref.mode))
 
@@ -162,8 +162,6 @@ async def _username_target(session: AsyncSession, group_id: int, raw: str) -> in
 
 
 def _split_command(text: str) -> tuple[str, list[str], str]:
-    # splitlines() handles \n/\r\n as well as Unicode line separators that
-    # third-party Telegram clients may preserve in message.text.
     lines = text.splitlines()
     if not lines:
         return "", [], ""
@@ -174,6 +172,37 @@ def _split_command(text: str) -> tuple[str, list[str], str]:
     command = parts[0].casefold()
     reason = "\n".join(lines[1:]).strip()
     return command, parts[1:], reason
+
+
+def _split_structural_args_and_inline_reason(
+    message: Message,
+    args: list[str],
+) -> tuple[list[str], str]:
+    """Separate target/duration tokens from a reason written on the first line.
+
+    Examples:
+      reply + `пред неадекват` -> [] / `неадекват`
+      `пред @user неадекват` -> [`@user`] / `неадекват`
+      `мут @user 2ч флуд` -> [`@user`, `2ч`] / `флуд`
+    """
+    structural: list[str] = []
+    reason_parts: list[str] = []
+    reply_target = bool(message.reply_to_message and message.reply_to_message.from_user)
+    target_seen = reply_target
+    duration_seen = False
+
+    for token in args:
+        if not duration_seen and parse_duration(token) is not None:
+            structural.append(token)
+            duration_seen = True
+            continue
+        if not target_seen and (token.isdigit() or token.startswith("@")):
+            structural.append(token)
+            target_seen = True
+            continue
+        reason_parts.append(token)
+
+    return structural, " ".join(reason_parts).strip()
 
 
 async def _parse_target_and_duration(
@@ -205,10 +234,7 @@ async def _parse_target_and_duration(
         unknown.append(token)
 
     if unknown:
-        return None, duration, (
-            "Не удалось разобрать команду. В первой строке оставьте только команду, пользователя и срок. "
-            "Причину пишите со второй строки."
-        )
+        return None, duration, "Не удалось разобрать пользователя или срок команды."
     if target_id is None:
         return None, duration, "Укажите пользователя: ответом на сообщение, @username или Telegram ID."
     return target_id, duration, None
@@ -295,7 +321,7 @@ async def moderation_command_mode(
     if group is None:
         return
 
-    command_word, args, direct_reason = _split_command(message.text or "")
+    command_word, raw_args, second_line_reason = _split_command(message.text or "")
     action = {"пред": "warn", "мут": "mute", "бан": "ban"}.get(command_word)
     if action is None:
         return
@@ -303,7 +329,12 @@ async def moderation_command_mode(
         await message.reply("У вас нет права выполнять эту команду.")
         return
 
-    target_id, duration, error = await _parse_target_and_duration(session, group, message, args)
+    structural_args, inline_reason = _split_structural_args_and_inline_reason(message, raw_args)
+    direct_reason = second_line_reason or inline_reason
+
+    target_id, duration, error = await _parse_target_and_duration(
+        session, group, message, structural_args
+    )
     if error or target_id is None:
         await message.reply(error or "Не удалось определить пользователя.")
         return
@@ -320,16 +351,13 @@ async def moderation_command_mode(
     mode = pref.mode
     await session.commit()
 
-    # An explicit second-line reason is an unambiguous moderator instruction.
-    # Honor it before any button-mode fallback so stale/ambiguous mode settings
-    # cannot discard a reason the moderator has already typed.
-    use_direct = bool(direct_reason)
+    use_direct = mode in {"text", "both"} and bool(direct_reason)
     if mode == "text" and not direct_reason:
         await message.reply(
-            "Включён текстовый режим. Причину напишите со второй строки.\n\n"
+            "Включён текстовый режим. Укажите причину текстом.\n\n"
             "Примеры:\n"
             "пред @username\nСпам\n\n"
-            "мут 123456 2ч\nОскорбления\n\n"
+            "мут 123456 2ч Оскорбления\n\n"
             "Или ответьте на сообщение:\nбан\nПовторное нарушение"
         )
         return
