@@ -28,5 +28,11 @@ def test_catch_all_router_is_last() -> None:
     assert order[-1] == "protection"
 
 
+def test_moderation_command_modes_precede_legacy_reply_handlers() -> None:
+    order = dispatcher_router_order(ROOT)
+    assert order.index("moderation_command_modes") < order.index("moderation_durable_guard")
+    assert order.index("moderation_command_modes") < order.index("group_commands")
+
+
 def test_router_registration_validation_passes() -> None:
     assert validate_router_registration(ROOT) == []
