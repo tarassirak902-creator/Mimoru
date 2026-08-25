@@ -1,13 +1,13 @@
 """moderation command modes
 
 Revision ID: 0045_moderation_command_modes
-Revises: 0044_group_disconnect_intents
+Revises: 56b9b87f0e44
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "0045_moderation_command_modes"
-down_revision = "0044_group_disconnect_intents"
+down_revision = "56b9b87f0e44"
 branch_labels = None
 depends_on = None
 
