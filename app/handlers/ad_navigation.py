@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.ui import panel_header
+from app.db.ad_market_models import RequiredAdDealRequest
+from app.services.ui import clean_ui_text, panel_header
 
 
 router = Router(name=__name__)
@@ -17,11 +21,49 @@ def _ads_home_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="📢 Мои рекламные посты", callback_data="gpost:mine"),
-            InlineKeyboardButton(text="📨 Мои запросы ОП", callback_data="reqdeal:buyer"),
+            InlineKeyboardButton(text="📨 Мои запросы ОП", callback_data="reqdeal:buyer:home"),
         ],
-        [InlineKeyboardButton(text="📥 Входящие заявки ОП", callback_data="reqdeal:seller")],
+        [InlineKeyboardButton(text="📥 Входящие заявки ОП", callback_data="reqdeal:seller:home")],
         [InlineKeyboardButton(text="◀️ Главное меню", callback_data="panel:home")],
     ])
+
+
+async def _render_home_deals(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    seller: bool,
+) -> None:
+    field = (
+        RequiredAdDealRequest.seller_telegram_id
+        if seller
+        else RequiredAdDealRequest.buyer_telegram_id
+    )
+    items = list((await session.scalars(
+        select(RequiredAdDealRequest)
+        .where(field == callback.from_user.id)
+        .order_by(RequiredAdDealRequest.created_at.desc())
+        .limit(30)
+    )).all())
+    icons = {
+        "pending": "⏳",
+        "accepted": "✅",
+        "rejected": "❌",
+        "cancelled": "🚫",
+        "activated": "🟢",
+    }
+    lines = [
+        f"{icons.get(item.status, '•')} #{item.id} · {clean_ui_text(item.target_resource)[:45]}"
+        for item in items
+    ]
+    title = "Входящие заявки ОП" if seller else "Мои запросы ОП"
+    await callback.message.edit_text(
+        panel_header(title, "\n".join(lines) if lines else "Заявок пока нет."),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="ads:home")],
+        ]),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "ads:home")
@@ -69,3 +111,23 @@ async def ads_sell(callback: CallbackQuery) -> None:
         ]),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "reqdeal:buyer:home")
+async def buyer_deals_from_ads_home(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await _render_home_deals(callback, session, seller=False)
+
+
+@router.callback_query(F.data == "reqdeal:seller:home")
+async def seller_deals_from_ads_home(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await _render_home_deals(callback, session, seller=True)
