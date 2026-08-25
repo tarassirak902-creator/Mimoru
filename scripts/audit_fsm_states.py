@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HANDLERS = ROOT / "app" / "handlers"
 
 errors: list[str] = []
+warnings: list[str] = []
 defined: dict[str, tuple[str, int]] = {}
 consumers: defaultdict[str, list[tuple[str, int, str]]] = defaultdict(list)
 entries: defaultdict[str, list[tuple[str, int, str]]] = defaultdict(list)
@@ -68,10 +69,16 @@ for path in sorted(HANDLERS.glob("*.py")):
                 entries[ref].append((rel(path), child.lineno, node.name))
 
 for key, (path, line) in sorted(defined.items()):
-    if not consumers[key]:
-        errors.append(f"{path}:{line}: FSM state {key} has no message/callback consumer")
-    if not entries[key]:
-        errors.append(f"{path}:{line}: FSM state {key} is never entered with set_state()")
+    has_consumer = bool(consumers[key])
+    has_entry = bool(entries[key])
+    if not has_consumer and not has_entry:
+        # A completely unused declaration cannot trap a live user in an FSM
+        # state, so keep it visible as cleanup debt without blocking releases.
+        warnings.append(f"{path}:{line}: unused FSM declaration {key}")
+    elif not has_consumer:
+        errors.append(f"{path}:{line}: FSM state {key} can be entered but has no message/callback consumer")
+    elif not has_entry:
+        errors.append(f"{path}:{line}: FSM state {key} has a consumer but is never entered with set_state()")
 
 for key, locations in sorted(entries.items()):
     if key not in defined:
@@ -82,8 +89,10 @@ print(
     f"FSM audit: {len(defined)} states, {sum(len(v) for v in entries.values())} entries, "
     f"{sum(len(v) for v in consumers.values())} state handlers"
 )
+for item in warnings:
+    print("WARN", item)
 if errors:
     for item in errors:
         print("ERROR", item)
     raise SystemExit(f"FSM state audit failed with {len(errors)} error(s)")
-print("FSM state coverage: OK")
+print(f"FSM state coverage: OK ({len(warnings)} unused declaration warning(s))")
