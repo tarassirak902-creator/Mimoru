@@ -48,9 +48,16 @@ async def upsert_user(session: AsyncSession, tg_user) -> User:
             "last_name": stmt.excluded.last_name,
         },
     )
-    await session.execute(stmt)
+    # PostgreSQL can return the inserted/updated User in the same round trip.
+    # populate_existing refreshes an already-loaded identity after ON CONFLICT
+    # instead of issuing a second SELECT on the hot update path.
+    result = await session.execute(
+        stmt.returning(User),
+        execution_options={"populate_existing": True},
+    )
+    user = result.scalar_one()
     await session.flush()
-    return await session.scalar(select(User).where(User.telegram_id == tg_user.id))
+    return user
 
 
 async def _invalidate_marketplace_on_owner_change(
