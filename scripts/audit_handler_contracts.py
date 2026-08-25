@@ -61,7 +61,7 @@ EXPECTED_DUPLICATE_WINNERS = {
     "F.data.regexp('^service_plan_apply:\\\\d+:(trial|standard|pro|free):(0|7|30)$')": "service_management_fixes.service_plan_apply_serialized",
     "F.data.regexp('^service_plan_grant:\\\\d+:(free|trial|standard|pro):(0|7|30)$')": "service_management_fixes.service_plan_grant_serialized",
     "F.data.regexp('^setting_flood:\\\\d+:(4|6|8):(5|10|15)$')": "navigation_fixes.contextual_antiflood_set",
-    "F.data.regexp('^setup:\\\\d+:start$')": "navigation_fixes.setup_start_with_contextual_cancel",
+    "F.data.regexp('^setup:\\\\d+:start$')": "wizard_navigation.legacy_start",
 }
 
 
