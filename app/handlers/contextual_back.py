@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DailyStat, Group, GroupMember, GroupSubscriptionEvent, Payment, User
+from app.db.models import DailyStat, Group, GroupMember, Payment, User
 from app.handlers.member_center import _member_card, owned_group
+from app.handlers.service_management_fixes import _apply_manual_plan
 from app.services.access import is_service_owner
+from app.services.client_access import set_client_blocked, set_group_service_active
 from app.services.group_health import calculate_group_health
 from app.services.group_refs import group_reference_label
 from app.services.plans import effective_plan, remaining_days, subscription_state
@@ -136,7 +137,14 @@ async def service_group_explicit(callback: CallbackQuery, bot: Bot, session: Asy
     await callback.answer()
 
 
-async def _render_client(callback: CallbackQuery, session: AsyncSession, telegram_id: int, *, back_callback: str) -> None:
+async def _render_client(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    telegram_id: int,
+    *,
+    source: str = "l",
+    group_id: int = 0,
+) -> None:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if user is None:
         await callback.answer("Клиент не найден.", show_alert=True)
@@ -168,8 +176,12 @@ async def _render_client(callback: CallbackQuery, session: AsyncSession, telegra
     action = "unblock" if user.service_blocked else "block"
     rows.append([InlineKeyboardButton(
         text="✅ Разблокировать клиента" if user.service_blocked else "🚫 Заблокировать клиента",
-        callback_data=f"service_client_confirm:{telegram_id}:{action}",
+        callback_data=f"uc:{source}:{group_id}:{telegram_id}:{action}",
     )])
+    if source == "l":
+        back_callback = "service:clients"
+    else:
+        back_callback = f"cg:{source}:{group_id}"
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_callback)])
     text = panel_header("Карточка клиента", _user_name(user, telegram_id))
     text += (
@@ -191,19 +203,16 @@ async def service_client_context(callback: CallbackQuery, session: AsyncSession)
     if not is_service_owner(callback.from_user.id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
-    tid = int(callback.data.split(":")[-1])
-    # Generic service_client buttons normally originate from a client list.
-    await _render_client(callback, session, tid, back_callback="service:clients")
+    await _render_client(callback, session, int(callback.data.split(":")[-1]))
     await callback.answer()
 
 
 @router.callback_query(F.data.regexp(r"^cl:\d+$"))
 async def service_client_from_list(callback: CallbackQuery, session: AsyncSession) -> None:
-    tid = int(callback.data.split(":")[-1])
     if not is_service_owner(callback.from_user.id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
-    await _render_client(callback, session, tid, back_callback="service:clients")
+    await _render_client(callback, session, int(callback.data.split(":")[-1]))
     await callback.answer()
 
 
@@ -213,17 +222,53 @@ async def service_client_from_group(callback: CallbackQuery, session: AsyncSessi
     if not is_service_owner(callback.from_user.id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
-    await _render_client(callback, session, int(raw_tid), back_callback=f"cg:{source}:{raw_gid}")
+    await _render_client(callback, session, int(raw_tid), source=source, group_id=int(raw_gid))
     await callback.answer()
 
 
-@router.callback_query(F.data.regexp(r"^cp:(g|sp|st|se|c\d+):\d+$"))
-async def service_plan_context(callback: CallbackQuery, session: AsyncSession) -> None:
-    _, source, raw_gid = callback.data.split(":")
-    group = await session.get(Group, int(raw_gid))
-    if not is_service_owner(callback.from_user.id) or group is None:
-        await callback.answer("Нет доступа или группа не найдена.", show_alert=True)
+@router.callback_query(F.data.regexp(r"^uc:(l|g|sp|st|se|c\d+):\d+:\d+:(block|unblock)$"))
+async def service_client_confirm_context(callback: CallbackQuery, session: AsyncSession) -> None:
+    _, source, raw_gid, raw_tid, action = callback.data.split(":")
+    if not is_service_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
         return
+    text = (
+        "Блокировка запретит клиенту пользоваться Mimoru и отключит все его группы."
+        if action == "block" else
+        "Разблокировка вернёт доступ клиенту. Его группы останутся выключенными, пока вы не включите их отдельно."
+    )
+    back = f"cl:{raw_tid}" if source == "l" else f"cc:{source}:{raw_gid}:{raw_tid}"
+    await callback.message.edit_text(
+        panel_header("Подтверждение", text),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, подтвердить", callback_data=f"ua:{source}:{raw_gid}:{raw_tid}:{action}")],
+            [InlineKeyboardButton(text="◀️ Отмена", callback_data=back)],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^ua:(l|g|sp|st|se|c\d+):\d+:\d+:(block|unblock)$"))
+async def service_client_apply_context(callback: CallbackQuery, session: AsyncSession) -> None:
+    _, source, raw_gid, raw_tid, action = callback.data.split(":")
+    if not is_service_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    result = await set_client_blocked(session, telegram_id=int(raw_tid), blocked=action == "block")
+    if result is None:
+        await callback.answer("Клиент не найден.", show_alert=True)
+        return
+    await _render_client(
+        callback,
+        session,
+        int(raw_tid),
+        source=source,
+        group_id=int(raw_gid),
+    )
+    await callback.answer("Сохранено")
+
+
+async def _render_plan(callback: CallbackQuery, group: Group, source: str) -> None:
     expires = group.plan_expires_at.strftime("%d.%m.%Y %H:%M UTC") if group.plan_expires_at else "без срока"
     await callback.message.edit_text(
         panel_header("Управление тарифом", f"{group.title}\n\nТекущий тариф: {effective_plan(group).upper()}\nСрок: {expires}\n\nВыберите тариф. Изменение требует подтверждения."),
@@ -235,6 +280,16 @@ async def service_plan_context(callback: CallbackQuery, session: AsyncSession) -
             [InlineKeyboardButton(text="◀️ К карточке группы", callback_data=f"cg:{source}:{group.id}")],
         ]),
     )
+
+
+@router.callback_query(F.data.regexp(r"^cp:(g|sp|st|se|c\d+):\d+$"))
+async def service_plan_context(callback: CallbackQuery, session: AsyncSession) -> None:
+    _, source, raw_gid = callback.data.split(":")
+    group = await session.get(Group, int(raw_gid))
+    if not is_service_owner(callback.from_user.id) or group is None:
+        await callback.answer("Нет доступа или группа не найдена.", show_alert=True)
+        return
+    await _render_plan(callback, group, source)
     await callback.answer()
 
 
@@ -258,29 +313,21 @@ async def service_plan_confirm_context(callback: CallbackQuery, session: AsyncSe
 @router.callback_query(F.data.regexp(r"^pa:(g|sp|st|se|c\d+):\d+:(free|trial|standard|pro):(0|7|30)$"))
 async def service_plan_apply_context(callback: CallbackQuery, session: AsyncSession) -> None:
     _, source, raw_gid, plan_code, raw_days = callback.data.split(":")
-    group = await session.get(Group, int(raw_gid))
-    if not is_service_owner(callback.from_user.id) or group is None:
-        await callback.answer("Нет доступа или группа не найдена.", show_alert=True)
+    if not is_service_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
         return
-    now = datetime.now(timezone.utc)
-    if plan_code == "free":
-        group.plan_code = "free"
-        group.plan_expires_at = None
-    else:
-        current_code = effective_plan(group)
-        start = group.plan_expires_at if current_code == plan_code and group.plan_expires_at and group.plan_expires_at > now else now
-        group.plan_code = plan_code
-        group.plan_expires_at = start + timedelta(days=int(raw_days))
-    session.add(GroupSubscriptionEvent(
-        group_id=group.id,
-        actor_telegram_id=callback.from_user.id,
-        event_type="admin_grant",
+    group = await _apply_manual_plan(
+        session,
+        group_id=int(raw_gid),
+        actor_id=callback.from_user.id,
         plan_code=plan_code,
-        expires_at=group.plan_expires_at,
-    ))
-    await session.commit()
-    callback.data = f"cp:{source}:{group.id}"
-    await service_plan_context(callback, session)
+        days=int(raw_days),
+    )
+    if group is None:
+        await callback.answer("Группа не найдена.", show_alert=True)
+        return
+    await _render_plan(callback, group, source)
+    await callback.answer("Сохранено")
 
 
 @router.callback_query(F.data.regexp(r"^ch:(g|sp|st|se|c\d+):\d+$"))
@@ -355,13 +402,17 @@ async def service_group_confirm_context(callback: CallbackQuery, session: AsyncS
 @router.callback_query(F.data.regexp(r"^ga:(g|sp|st|se|c\d+):\d+:(enable|disable)$"))
 async def service_group_apply_context(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
     _, source, raw_gid, action = callback.data.split(":")
-    group = await session.get(Group, int(raw_gid))
-    if not is_service_owner(callback.from_user.id) or group is None:
-        await callback.answer("Нет доступа или группа не найдена.", show_alert=True)
+    if not is_service_owner(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
         return
-    group.is_active = action == "enable"
-    await session.commit()
-    await _render_group(callback, bot, session, group, source)
+    result = await set_group_service_active(session, group_id=int(raw_gid), active=action == "enable")
+    if result.group is None:
+        await callback.answer("Группа не найдена.", show_alert=True)
+        return
+    if result.blocked_owner:
+        await callback.answer("Сначала разблокируйте клиента-владельца группы.", show_alert=True)
+        return
+    await _render_group(callback, bot, session, result.group, source)
     await callback.answer("Сохранено")
 
 
