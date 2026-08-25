@@ -44,9 +44,11 @@ def test_manual_permission_router_precedes_legacy_advanced_router():
 
 def test_hardened_delivery_scheduler_uses_safe_permission_tasks():
     leader = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
-    assert "from app.tasks_delivery import background_loop" in leader
-    safe_loop = (ROOT / "app/tasks_delivery.py").read_text(encoding="utf-8")
-    assert "from app.tasks_permission_modes import apply_night_modes, expire_lockdowns" in safe_loop
+    scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
+    assert "from app.tasks_scheduler import background_loop" in leader
+    assert "from app.tasks_permission_modes import apply_night_modes, expire_lockdowns" in scheduler
+    assert "await _run_job(\"expire_lockdowns\"" in scheduler
+    assert "await _run_job(\"apply_night_modes\"" in scheduler
 
 
 def test_failed_background_restore_keeps_durable_state_for_retry():
