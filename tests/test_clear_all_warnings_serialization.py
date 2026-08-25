@@ -31,12 +31,10 @@ def test_clear_all_warnings_locks_before_live_authorization_and_commit() -> None
     assert lock < permission < hierarchy < mutation < commit
 
 
-def test_execute_based_moderation_handlers_do_not_take_outer_group_lock() -> None:
+def test_legacy_direct_moderation_handler_is_physically_removed() -> None:
     source = _source()
-    for name in ("direct_reply_moderation",):
-        body = _handler(source, name)
-        assert "for_update=True" not in body
-        assert "await execute(" in body
+    assert "async def direct_reply_moderation" not in source
+    assert "DIRECT_MODERATION_RE" not in source
 
 
 def test_unmute_and_unban_combined_do_not_take_outer_group_lock() -> None:
