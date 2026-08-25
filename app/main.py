@@ -4,56 +4,93 @@ from typing import Any
 import structlog
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import TelegramMethod
+from aiogram.methods.base import TelegramMethod
 from aiogram.types import BotCommand, BotCommandScopeAllGroupChats
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.db.session import DatabaseMiddleware, dispose_engine
-from app.handlers import ad_invoice_safety, ad_legacy_payment_guard, ad_market_atomic, ad_market_v3, ad_navigation, admin_access_mode, advanced, audit, automation, billing, campaign_spam, client_management, common, contextual_back, control_center, deferred_bans, deleted_accounts, member_center, member_navigation, dashboard, edit_protection, features, fun_bot_guard, fun_commands, fun_extras, fun_help, fun_preferences, fun_social, fun_stats, group, group_action_aliases, group_commands, group_directory, group_lookup, group_onboarding_flow, group_owner_mutation_fixes, group_shortcuts, group_stats_v2, hardening, home_panel, input_safety, invite_operation_guard, join_review_guard, join_requests, member_profile_v2, members, mentions, moderation_command_modes, moderation_durable_guard, navigation, navigation_fixes, operations, operations_center, onboarding, panel, permission_modes, plan_catalog, plan_directory, plan_legacy_redirect, protection, quarantine, rank_legacy_guard, rank_policy_fix, rank_provisioning_handlers, rank_text_commands, reason_admin, required_direct, safety, service_admin, service_broadcast, service_group_access, service_management, service_management_fixes, service_owner_directory, setup_legacy_redirect, slow_mode, sender_chats, mimoru_identity, telegram_roles, wizard_navigation, kick_retirement
+from app.keyboards import panel as panel_keyboards
+from app.keyboards.home import automation_menu, channels_admin_menu, content_menu, group_health_menu, home_menu, members_menu, moderation_menu, operations_menu, protection_menu, service_menu, settings_detail_menu, settings_menu
+
+panel_keyboards.main_menu = home_menu
+panel_keyboards.service_menu = service_menu
+panel_keyboards.protection_menu = protection_menu
+panel_keyboards.moderation_menu = moderation_menu
+panel_keyboards.members_menu = members_menu
+panel_keyboards.content_menu = content_menu
+panel_keyboards.settings_menu = settings_menu
+panel_keyboards.settings_detail_menu = settings_detail_menu
+panel_keyboards.channels_admin_menu = channels_admin_menu
+panel_keyboards.automation_menu = automation_menu
+panel_keyboards.operations_menu = operations_menu
+panel_keyboards.group_health_menu = group_health_menu
+
+from app.handlers import ad_invoice_safety, ad_legacy_payment_guard, ad_market_atomic, ad_market_v3, ad_navigation, admin_access_mode, advanced, audit, automation, billing, campaign_spam, client_management, common, contextual_back, control_center, deferred_bans, deleted_accounts, member_center, member_navigation, dashboard, edit_protection, features, fun_bot_guard, fun_commands, fun_extras, fun_help, fun_preferences, fun_social, fun_stats, group, group_action_aliases, group_commands, group_directory, group_lookup, group_onboarding_flow, group_owner_mutation_fixes, group_shortcuts, group_stats_v2, hardening, home_panel, input_safety, invite_operation_guard, join_review_guard, join_requests, member_profile_v2, members, mentions, moderation_command_modes, moderation_durable_guard, navigation, navigation_fixes, operations, operations_center, onboarding, panel, permission_modes, plan_catalog, plan_directory, plan_legacy_redirect, protection, quarantine, rank_legacy_guard, rank_policy_fix, rank_provisioning_handlers, rank_text_commands, reason_admin, required_direct, safety, service_admin, service_broadcast, service_group_access, service_management, service_management_fixes, service_owner_directory, setup_legacy_redirect, slow_mode, sender_chats, mimoru_identity, telegram_roles, wizard_navigation
+from app.handlers import kick_retirement
 from app.health import HealthServer
-from app.middlewares import CancelledReplyMiddleware
+from app.middlewares import DatabaseMiddleware
 from app.middlewares_rank_access import RankAccessModeMiddleware
-from app.preflight import run_preflight
+from app.reply_safety import CancelledReplyMiddleware
+from app.services.activity_tracking import track_outgoing_group_result
 from app.services.ad_market_schema import ensure_ad_market_schema
 from app.services.background_leader import leader_background_loop
-from app.services.chat_permission_transitions import ensure_chat_permission_transition_schema
-from app.services.deleted_accounts import ensure_deleted_cleanup_retry_schema
-from app.services.group_disconnects import ensure_group_disconnect_schema
-from app.services.invite_execution import ensure_invite_operation_schema
+from app.services.chat_permission_transitions import recover_chat_permission_transitions
+from app.services.join_request_transitions import recover_invite_operations, recover_join_request_reviews
 from app.services.moderation_operation_schema import ensure_moderation_operation_schema
 from app.services.moderation_operations import recover_moderation_operation_intents
-from app.services.rank_provisioning import ensure_rank_provisioning_schema
-from app.services.required_resources import ensure_required_resource_schema
-from app.services.runtime import configure_runtime
+from app.services.public_identity import replace_public_group_id_labels
+from app.services.rank_provisioning import recover_rank_provisioning_intents
 from app.services.ui import clean_ui_text
-from app.services.user_refs import replace_public_group_id_labels
+from app.tasks_ad_market import ad_market_background_loop
+from app.tasks_fun import fun_background_loop
+from app.services.runtime import stop_task
 
 
-_IDEMPOTENT_EDIT_METHODS = {"EditMessageText", "EditMessageReplyMarkup", "EditMessageCaption", "EditMessageMedia"}
+_PLAIN_TEXT_FIELDS = ("text", "caption", "title", "description", "explanation", "question")
+_RETIRED_KICK_CALLBACK_PREFIXES = ("reason_action:", "member_punish:", "role_perm:")
+_IDEMPOTENT_EDIT_METHODS = {
+    "EditMessageText",
+    "EditMessageCaption",
+    "EditMessageMedia",
+    "EditMessageReplyMarkup",
+}
+
+
+def _is_retired_kick_button(button: Any) -> bool:
+    callback_data = getattr(button, "callback_data", None)
+    return bool(
+        isinstance(callback_data, str)
+        and callback_data.endswith(":kick")
+        and callback_data.startswith(_RETIRED_KICK_CALLBACK_PREFIXES)
+    )
 
 
 def _plain_reply_markup(markup: Any) -> Any:
-    if markup is None or not hasattr(markup, "inline_keyboard"):
+    if markup is None or not hasattr(markup, "model_copy"):
         return markup
-    rows = []
-    changed = False
-    for row in markup.inline_keyboard:
-        new_row = []
-        for button in row:
-            text = clean_ui_text(button.text) if isinstance(button.text, str) else button.text
-            if text != button.text:
-                changed = True
-                button = button.model_copy(update={"text": text})
-            new_row.append(button)
-        rows.append(new_row)
-    return markup.model_copy(update={"inline_keyboard": rows}) if changed else markup
+    if hasattr(markup, "inline_keyboard"):
+        rows = []
+        for row in markup.inline_keyboard:
+            cleaned_row = [
+                button.model_copy(update={"text": clean_ui_text(button.text)})
+                if isinstance(getattr(button, "text", None), str)
+                else button
+                for button in row
+                if not _is_retired_kick_button(button)
+            ]
+            if cleaned_row:
+                rows.append(cleaned_row)
+        return markup.model_copy(update={"inline_keyboard": rows})
+    if hasattr(markup, "keyboard"):
+        rows = [[button.model_copy(update={"text": clean_ui_text(button.text)}) if isinstance(getattr(button, "text", None), str) else button for button in row] for row in markup.keyboard]
+        return markup.model_copy(update={"keyboard": rows})
+    return markup
 
 
 def _plain_method(method: TelegramMethod[Any]) -> TelegramMethod[Any]:
     updates: dict[str, Any] = {}
-    for field in ("text", "caption"):
+    for field in _PLAIN_TEXT_FIELDS:
         value = getattr(method, field, None)
         if isinstance(value, str):
             updates[field] = clean_ui_text(value)
@@ -77,10 +114,10 @@ def _is_idempotent_edit_error(method: TelegramMethod[Any], exc: TelegramBadReque
 def _disable_legacy_direct_moderation_handlers() -> None:
     """Keep пред/мут/бан on one message-handler path only.
 
-    Several older routers can consume the same reply command and always open the
-    legacy reason picker. They remain importable for helpers/callbacks, but their
-    competing message entrypoints are removed at startup. All unrelated handlers
-    and callbacks stay registered.
+    Older reply handlers can consume the same update and force the legacy reason
+    picker before the configurable command-mode handler sees the message. They
+    remain importable for helpers/callbacks, but their competing message
+    entrypoints are removed at startup. Unrelated handlers stay registered.
     """
     retired = {
         id(kick_retirement.router): {"moderation_reason_entry"},
@@ -232,53 +269,58 @@ async def main() -> None:
         service_group_access.router,
         service_management.router,
         service_admin.router,
-        service_broadcast.router,
-        client_management.router,
-        campaign_spam.router,
+        dashboard.router,
+        required_direct.router,
+        group_owner_mutation_fixes.router,
+        group.router,
+        audit.router,
         hardening.router,
         safety.router,
-        required_direct.router,
-        sender_chats.router,
-        slow_mode.router,
-        permission_modes.router,
-        protection.router,
         quarantine.router,
-        mentions.router,
+        slow_mode.router,
+        campaign_spam.router,
         edit_protection.router,
         invite_operation_guard.router,
         join_review_guard.router,
         join_requests.router,
-        group_owner_mutation_fixes.router,
+        mentions.router,
+        sender_chats.router,
+        members.router,
+        operations.router,
+        permission_modes.router,
         advanced.router,
         features.router,
-        audit.router,
-        dashboard.router,
-        operations.router,
-        group.router,
-        members.router,
+        service_broadcast.router,
+        client_management.router,
+        protection.router,
     )
-
-    await configure_runtime(redis)
-    await ensure_required_resource_schema()
-    await ensure_moderation_operation_schema()
-    await ensure_rank_provisioning_schema()
-    await ensure_chat_permission_transition_schema()
-    await ensure_invite_operation_schema()
-    await ensure_deleted_cleanup_retry_schema()
-    await ensure_group_disconnect_schema()
-    await ensure_ad_market_schema()
-    await recover_moderation_operation_intents(bot)
-    await run_preflight(bot, redis)
-    await configure_bot(bot)
-    await health.start()
-    leader_task = asyncio.create_task(leader_background_loop(bot, redis))
-    log.info("bot_started", bot_id=bot.id, username=(await bot.get_me()).username)
+    stop_event = asyncio.Event()
+    task = None
+    ad_market_task = None
+    fun_task = None
     try:
-        await dp.start_polling(bot)
+        await ensure_ad_market_schema()
+        await ensure_moderation_operation_schema()
+        await recover_rank_provisioning_intents(bot)
+        await recover_chat_permission_transitions(bot)
+        await recover_join_request_reviews(bot)
+        await recover_invite_operations()
+        await recover_moderation_operation_intents(bot)
+        await configure_bot(bot)
+        await health.start()
+        task = asyncio.create_task(leader_background_loop(bot, redis, stop_event), name="background-loop")
+        ad_market_task = asyncio.create_task(ad_market_background_loop(bot, stop_event), name="ad-market-background-loop")
+        fun_task = asyncio.create_task(fun_background_loop(bot, stop_event), name="fun-background-loop")
+        me = await bot.get_me()
+        health.set_ready(True)
+        log.info("bot_started", bot_id=me.id, username=me.username)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        leader_task.cancel()
-        await health.stop()
-        await dispose_engine()
+        stop_event.set()
+        await stop_task(task, timeout=10.0)
+        await stop_task(ad_market_task, timeout=10.0)
+        await stop_task(fun_task, timeout=10.0)
+        await health.close()
         await redis.aclose()
         await bot.session.close()
 
