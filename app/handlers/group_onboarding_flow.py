@@ -39,6 +39,13 @@ ACTIVE_BOT_STATUSES = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
 INACTIVE_BOT_STATUSES = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
 START_GROUP_RE = re.compile(r"^/start(?:@\w+)?\s+group_(\d+)$", re.IGNORECASE)
 CONNECT_COMMAND = "подключить"
+ADMIN_PROMOTION_RIGHTS = (
+    "manage_chat",
+    "delete_messages",
+    "restrict_members",
+    "invite_users",
+    "pin_messages",
+)
 
 # Legacy onboarding markers retained for compatibility tests/documentation:
 # import_existing_admin_ranks
@@ -50,6 +57,16 @@ def _connect_command_markup() -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="📋 подключить",
             copy_text=CopyTextButton(text=CONNECT_COMMAND),
+        )
+    ]])
+
+
+def _admin_promotion_markup(bot_username: str) -> InlineKeyboardMarkup:
+    rights = "+".join(ADMIN_PROMOTION_RIGHTS)
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🛡 Назначить администратором",
+            url=f"https://t.me/{bot_username}?startgroup=mimoru&admin={rights}",
         )
     ]])
 
@@ -109,12 +126,14 @@ async def bot_group_membership_changed(event: ChatMemberUpdated, bot: Bot, sessi
         return
     if old_status in INACTIVE_BOT_STATUSES and new_status == ChatMemberStatus.MEMBER:
         try:
+            username = event.new_chat_member.user.username
             await bot.send_message(
                 event.chat.id,
                 "👋 Mimoru добавлена в группу, но пока без прав администратора.\n\n"
-                "Для подключения сначала назначьте Mimoru администратором. После этого владелец группы должен отправить команду «подключить».\n\n"
-                "Команду можно заранее скопировать кнопкой ниже.",
-                reply_markup=_connect_command_markup(),
+                "Для подключения сначала назначьте Mimoru администратором.\n"
+                "Нажмите кнопку ниже и выдайте боту необходимые права.\n\n"
+                "После назначения администратором Mimoru сама пришлёт следующий шаг с командой «подключить».",
+                reply_markup=_admin_promotion_markup(username) if username else None,
             )
         except (TelegramBadRequest, TelegramForbiddenError):
             pass
