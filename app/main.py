@@ -111,32 +111,6 @@ def _is_idempotent_edit_error(method: TelegramMethod[Any], exc: TelegramBadReque
     )
 
 
-def _disable_legacy_direct_moderation_handlers() -> None:
-    """Keep пред/мут/бан on one message-handler path only.
-
-    Older reply handlers can consume the same update and force the legacy reason
-    picker before the configurable command-mode handler sees the message. They
-    remain importable for helpers/callbacks, but their competing message
-    entrypoints are removed at startup. Unrelated handlers stay registered.
-    """
-    retired = {
-        id(kick_retirement.router): {"moderation_reason_entry"},
-        id(group_commands.router): {"direct_reply_moderation"},
-        id(moderation_durable_guard.router): {"durable_direct_reply"},
-    }
-    for legacy_router in (
-        kick_retirement.router,
-        group_commands.router,
-        moderation_durable_guard.router,
-    ):
-        names = retired[id(legacy_router)]
-        legacy_router.message.handlers[:] = [
-            handler
-            for handler in legacy_router.message.handlers
-            if getattr(handler.callback, "__name__", "") not in names
-        ]
-
-
 class PlainTextBot(Bot):
     async def __call__(self, method: TelegramMethod[Any], request_timeout: int | None = None) -> Any:
         plain_method = _plain_method(method)
@@ -210,7 +184,6 @@ async def main() -> None:
     for rank_router in (admin_access_mode.router, telegram_roles.router):
         rank_router.callback_query.middleware(rank_access_middleware)
         rank_router.message.middleware(rank_access_middleware)
-    _disable_legacy_direct_moderation_handlers()
     dp.include_routers(
         fun_preferences.router,
         fun_extras.router,
