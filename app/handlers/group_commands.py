@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message
@@ -34,11 +32,6 @@ CLEAR_WARNING_WORDS = {
     "обнулить предупреждения",
     "снять все преды",
 }
-DIRECT_MODERATION_RE = re.compile(r"^(?:мут|бан|пред|снять пред)(?:\s|$)", re.IGNORECASE)
-DURATION_RE = re.compile(
-    r"(?P<value>\d+)\s*(?P<unit>с|сек(?:унд(?:а|ы)?)?|м|мин(?:ут(?:а|ы)?)?|ч|час(?:а|ов)?|д|дн(?:я|ей)?)",
-    re.IGNORECASE,
-)
 
 
 async def _active_group(
@@ -60,31 +53,6 @@ def _target_from_reply(message: Message):
     if message.reply_to_message is None:
         return None
     return message.reply_to_message.from_user
-
-
-def parse_duration(text: str) -> int | None:
-    match = DURATION_RE.search(text.casefold())
-    if match is None:
-        return None
-    value = int(match.group("value"))
-    unit = match.group("unit").casefold()
-    if unit.startswith("с"):
-        multiplier = 1
-    elif unit == "м" or unit.startswith("мин"):
-        multiplier = 60
-    elif unit == "ч" or unit.startswith("час"):
-        multiplier = 3600
-    else:
-        multiplier = 86400
-    return value * multiplier
-
-
-def _moderation_reason(raw: str, command_len: int, *, remove_duration: bool = False) -> str:
-    """Return only a reason explicitly supplied by the moderator."""
-    tail = raw[command_len:].strip()
-    if remove_duration:
-        tail = DURATION_RE.sub("", tail, count=1).strip(" \t\n,.;:-")
-    return tail.strip()
 
 
 async def _notify_complaint_recipients(
@@ -117,8 +85,6 @@ async def _notify_complaint_recipients(
 
     recipients.discard(reporter_id)
     delivered = 0
-    # Names are resolved centrally right before Telegram delivery. The old duplicated
-    # "name · ID 123" output is intentionally gone: admins see one clickable identity.
     text = panel_header(
         "Жалоба в группе",
         f"Группа: {group.title}\n"
@@ -253,7 +219,7 @@ async def _do_unban(
 async def unmute_combined(message: Message, bot: Bot, session: AsyncSession) -> None:
     if message.from_user is None:
         return
-    target_id, label = await resolve_target_user(
+    target_id, _ = await resolve_target_user(
         session, message.chat.id, message, command_keyword="говори",
     )
     if target_id is None:
@@ -312,67 +278,6 @@ async def clear_all_warnings(message: Message, bot: Bot, session: AsyncSession) 
     )
     await session.commit()
     await message.reply(f"✅ Сняты все активные предупреждения: {len(rows)}.")
-
-
-@router.message(
-    F.chat.type.in_(GROUP_TYPES),
-    F.reply_to_message,
-    F.text.regexp(DIRECT_MODERATION_RE),
-)
-async def direct_reply_moderation(message: Message, bot: Bot, session: AsyncSession) -> None:
-    if message.from_user is None:
-        return
-    group = await _active_group(session, message.chat.id)
-    if group is None:
-        return
-
-    raw = (message.text or "").strip()
-    lowered = raw.casefold()
-    action: str
-    duration: int | None = None
-    reason = ""
-
-    if lowered == "снять пред" or lowered.startswith("снять пред "):
-        action = "unwarn"
-    elif lowered == "бан" or lowered.startswith("бан "):
-        action = "ban"
-        duration = parse_duration(raw[3:])
-        reason = _moderation_reason(raw, 3, remove_duration=True)
-    elif lowered == "мут" or lowered.startswith("мут "):
-        action = "mute"
-        duration = parse_duration(raw[3:])
-        reason = _moderation_reason(raw, 3, remove_duration=True)
-    elif lowered == "пред" or lowered.startswith("пред "):
-        action = "warn"
-        reason = _moderation_reason(raw, 4)
-    else:
-        return
-
-    target_id, _ = await resolve_target_user(
-        session, message.chat.id, message, command_keyword="",
-    )
-    if target_id is None:
-        return
-    if not await can_moderate(bot, session, group, message.from_user.id, action):
-        return
-
-    notice = await execute(
-        bot=bot,
-        session=session,
-        chat_id=message.chat.id,
-        group_id=group.id,
-        target_id=target_id,
-        moderator_id=message.from_user.id,
-        action=action,
-        duration=duration,
-        reason=reason,
-        warnings_limit=group.settings.warnings_limit,
-        default_mute=group.settings.default_mute_seconds,
-        target_name=public_user_token(target_id),
-        moderator_name=public_user_token(message.from_user.id),
-    )
-    await session.commit()
-    await message.reply(notice)
 
 
 async def _resolve_group_user(session: AsyncSession, group_id: int, raw: str) -> tuple[int | None, str]:
