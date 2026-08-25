@@ -155,7 +155,17 @@ class DatabaseMiddleware(BaseMiddleware):
                             )
                         )
                         if group is not None:
-                            await track_group_member(session, group.id, tg_user, present=True)
+                            # upsert_user() already ran above, and this hot path does
+                            # not need the GroupMember ORM row back. Avoid repeating
+                            # the user upsert and the final member SELECT per message.
+                            await track_group_member(
+                                session,
+                                group.id,
+                                tg_user,
+                                present=True,
+                                ensure_user=False,
+                                return_row=False,
+                            )
                             await _track_daily_message(session, group.id, event)
                     completed_payment = isinstance(event, Message) and event.successful_payment is not None
                     if user.service_blocked and not completed_payment:
