@@ -48,7 +48,9 @@ def test_daily_report_claim_remains_durable_before_send() -> None:
 
 
 def test_production_background_loop_calls_hardened_daily_reports() -> None:
-    background = _function("background_loop")
-    assert "await send_daily_reports(bot)" in background
+    scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
     leader = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
-    assert "from app.tasks_delivery import background_loop" in leader
+    assert "send_daily_reports," in scheduler
+    assert 'await _run_job("send_daily_reports", lambda: send_daily_reports(bot))' in scheduler
+    assert "REPORT_TASK_SECONDS = 60.0" in scheduler
+    assert "from app.tasks_scheduler import background_loop" in leader
