@@ -3,7 +3,7 @@ from pathlib import Path
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import EditMessageReplyMarkup, EditMessageText, SendMessage
 
-from app.services.idempotent_edits import is_idempotent_edit_error
+from app.main import _is_idempotent_edit_error as is_idempotent_edit_error
 
 
 ROOT = Path(__file__).resolve().parents[1]
