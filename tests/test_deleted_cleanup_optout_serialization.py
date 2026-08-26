@@ -50,8 +50,9 @@ def test_owner_automation_optout_uses_same_group_lock_boundary() -> None:
 
 
 def test_production_scheduler_reaches_serialized_deleted_cleanup_worker() -> None:
-    delivery = (ROOT / "app/tasks_delivery.py").read_text(encoding="utf-8")
+    scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
     leader = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
-    assert "from app.tasks_deleted_cleanup import run_group_automation" in delivery
-    assert "await run_group_automation(bot)" in delivery
-    assert "from app.tasks_delivery import background_loop" in leader
+    assert "from app.tasks_deleted_cleanup import run_group_automation" in scheduler
+    assert 'await _run_job("run_group_automation", lambda: run_group_automation(bot))' in scheduler
+    assert "GROUP_AUTOMATION_SECONDS = 300.0" in scheduler
+    assert "from app.tasks_scheduler import background_loop" in leader
