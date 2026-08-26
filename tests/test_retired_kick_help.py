@@ -4,22 +4,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_help_sanitizes_legacy_panel_only_when_needed():
+def test_help_is_correct_in_source_without_runtime_monkey_patch():
     retirement = (ROOT / "app/handlers/kick_retirement.py").read_text(encoding="utf-8")
+    panel = (ROOT / "app/handlers/panel.py").read_text(encoding="utf-8")
     main = (ROOT / "app/main.py").read_text(encoding="utf-8")
     home = (ROOT / "app/handlers/home_panel.py").read_text(encoding="utf-8")
     common = (ROOT / "app/handlers/common.py").read_text(encoding="utf-8")
 
-    # Current user-facing help is correct in source and does not rely on import
-    # order or runtime monkey-patching.
     assert "пред, мут 2ч, кик или бан." not in home
     assert "пред, мут 2ч, кик или бан." not in common
     assert "пред, мут 2ч или бан." in home
     assert "пред, мут 2ч или бан." in common
+    assert "<code>кик</code>" not in panel
+    assert "мута, кика и бана" not in panel
 
-    # The legacy panel is still sanitized for old/secondary handler paths.
-    assert '"app.handlers.panel"' in retirement
-    assert '"COMMANDS_TEXT"' in retirement
+    # Compatibility module only guards already-sent kick callbacks.
+    assert "sys.modules" not in retirement
+    assert "COMMANDS_TEXT" not in retirement
+    assert "retired_kick_callback" in retirement
 
     # The guided home handler is the actual first panel:commands winner.
     assert 'F.data == "panel:commands"' in home
