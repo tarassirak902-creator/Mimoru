@@ -20,11 +20,11 @@ def test_scheduler_uses_hardened_expiry_service() -> None:
     assert "await expire_punishments(bot, redis)" in loop
 
 
-def test_expiry_scans_ids_then_rechecks_under_group_and_punishment_locks() -> None:
+def test_expiry_scans_ids_and_group_ids_then_rechecks_under_locks() -> None:
     body = _expiry_body()
 
-    scan = body.index("select(Punishment.id).where(")
-    loop = body.index("for punishment_id in candidate_ids:", scan)
+    scan = body.index("select(Punishment.id, Punishment.group_id).where(")
+    loop = body.index("for punishment_id, group_id in candidates:", scan)
     group_lock = body.index("select(Group).where(Group.id == group_id).with_for_update()", loop)
     punishment_lock = body.index("select(Punishment)", group_lock)
     punishment_for_update = body.index(".with_for_update()", punishment_lock)
@@ -32,7 +32,7 @@ def test_expiry_scans_ids_then_rechecks_under_group_and_punishment_locks() -> No
 
     assert scan < loop < group_lock < punishment_lock < punishment_for_update < recheck
     initial_scan = body[scan:loop]
-    assert "select(Punishment.id)" in initial_scan
+    assert "select(Punishment.id, Punishment.group_id)" in initial_scan
     assert "select(Punishment)" not in initial_scan
 
 
