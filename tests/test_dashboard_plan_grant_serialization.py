@@ -9,7 +9,7 @@ def test_dashboard_plan_grant_uses_serialized_winner() -> None:
     handler = source.split("async def service_plan_grant_serialized", 1)[1].split(
         "async def service_plan_apply_serialized", 1
     )[0]
-    assert "await _apply_manual_plan(" in handler
+    assert "await apply_manual_plan(" in handler
     assert "session.get(Group" not in handler
     assert "group.plan_expires_at =" not in handler
 
