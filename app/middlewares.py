@@ -12,10 +12,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DailyStat, Group
+from app.db.rank_models import RankAssignment
 from app.db.session import SessionFactory
 from app.keyboards.home import cancel_input_menu
 from app.services.deleted_accounts import track_group_member
-from app.services.ranks import is_untouchable
+from app.services.ranks import UNTOUCHABLE
 from app.services.repositories import GroupNotConnectedError, upsert_user
 
 
@@ -144,20 +145,31 @@ class DatabaseMiddleware(BaseMiddleware):
             try:
                 tg_user = getattr(event, "from_user", None)
                 group: Group | None = None
+                untouchable = False
                 if tg_user is not None:
                     user = await upsert_user(session, tg_user)
                     chat = getattr(event, "chat", None)
                     if isinstance(event, Message) and chat is not None and chat.type in {"group", "supergroup"}:
-                        group = await session.scalar(
-                            select(Group).where(
-                                Group.telegram_chat_id == chat.id,
-                                Group.is_active.is_(True),
+                        untouchable_exists = select(RankAssignment.id).where(
+                            RankAssignment.group_id == Group.id,
+                            RankAssignment.user_telegram_id == tg_user.id,
+                            RankAssignment.rank_code == UNTOUCHABLE,
+                            RankAssignment.active.is_(True),
+                        ).exists()
+                        group_row = (
+                            await session.execute(
+                                select(Group, untouchable_exists.label("is_untouchable")).where(
+                                    Group.telegram_chat_id == chat.id,
+                                    Group.is_active.is_(True),
+                                )
                             )
-                        )
-                        if group is not None:
+                        ).one_or_none()
+                        if group_row is not None:
+                            group = group_row[0]
+                            untouchable = bool(group_row[1])
                             # upsert_user() already ran above, and this hot path does
                             # not need the GroupMember ORM row back. Avoid repeating
-                            # the user upsert and the final member SELECT per message.
+                            # the user upsert and returning a member row per message.
                             await track_group_member(
                                 session,
                                 group.id,
@@ -187,7 +199,7 @@ class DatabaseMiddleware(BaseMiddleware):
                         isinstance(event, Message)
                         and group is not None
                         and _is_regular_group_message(event)
-                        and await is_untouchable(session, group.id, tg_user.id)
+                        and untouchable
                     ):
                         await session.commit()
                         return None
