@@ -54,7 +54,6 @@ EXPECTED_DUPLICATE_WINNERS = {
     "F.data.regexp('^roles:\\\\d+$')": "telegram_roles.telegram_and_solivra_roles",
     "F.data.regexp('^service:groups:(active|disabled)$')": "group_directory.service_groups_filtered",
     "F.data.regexp('^service_client:\\\\d+$')": "contextual_back.service_client_context",
-    "F.data.regexp('^service_client_action:\\\\d+:(block|unblock)$')": "service_management_fixes.client_action_serialized",
     "F.data.regexp('^service_group:\\\\d+$')": "contextual_back.service_group_context",
     "F.data.regexp('^service_group_action:\\\\d+:(enable|disable)$')": "group_directory.service_group_action",
     "F.data.regexp('^service_group_confirm:\\\\d+:(enable|disable)$')": "group_directory.service_group_confirm",
