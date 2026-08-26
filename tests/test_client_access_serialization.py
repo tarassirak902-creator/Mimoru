@@ -27,23 +27,24 @@ def test_unblock_does_not_reenable_groups() -> None:
     assert "group.is_active = True" not in body
 
 
-def test_modern_and_legacy_client_mutations_use_serialized_winners() -> None:
-    source = (ROOT / "app/handlers/service_management_fixes.py").read_text(encoding="utf-8")
-    main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+def test_modern_and_legacy_client_mutations_share_serialized_service() -> None:
+    modern_source = (ROOT / "app/handlers/service_management.py").read_text(encoding="utf-8")
+    legacy_source = (ROOT / "app/handlers/service_management_fixes.py").read_text(encoding="utf-8")
 
-    modern = source.split("async def client_action_serialized", 1)[1].split(
+    modern = modern_source.split("async def client_action", 1)[1].split(
+        "async def _groups_screen", 1
+    )[0]
+    legacy_block = legacy_source.split("async def legacy_block_client_serialized", 1)[1].split(
         "@router.message", 1
     )[0]
-    legacy_block = source.split("async def legacy_block_client_serialized", 1)[1].split(
-        "@router.message", 1
-    )[0]
-    legacy_unblock = source.split("async def legacy_unblock_client_serialized", 1)[1].split(
+    legacy_unblock = legacy_source.split("async def legacy_unblock_client_serialized", 1)[1].split(
         "@router.message", 1
     )[0]
 
-    assert 'F.data.regexp(r"^service_client_action:\\d+:(block|unblock)$")' in source
-    assert 'F.text.regexp(r"(?i)^заблокировать клиента \\d+$")' in source
-    assert 'F.text.regexp(r"(?i)^разблокировать клиента \\d+$")' in source
+    assert 'F.data.regexp(r"^service_client_action:\\d+:(block|unblock)$")' in modern_source
+    assert 'F.data.regexp(r"^service_client_action:\\d+:(block|unblock)$")' not in legacy_source
+    assert 'F.text.regexp(r"(?i)^заблокировать клиента \\d+$")' in legacy_source
+    assert 'F.text.regexp(r"(?i)^разблокировать клиента \\d+$")' in legacy_source
     assert "await set_client_blocked(" in modern
     assert "await set_client_blocked(" in legacy_block
     assert "await set_client_blocked(" in legacy_unblock
@@ -52,6 +53,14 @@ def test_modern_and_legacy_client_mutations_use_serialized_winners() -> None:
     assert "user.service_blocked" not in modern
     assert "user.service_blocked" not in legacy_block
 
-    fixes = main.index("service_management_fixes.router")
-    assert fixes < main.index("service_management.router")
-    assert fixes < main.index("client_management.router")
+
+def test_client_list_uses_one_aggregate_group_count_query() -> None:
+    source = (ROOT / "app/handlers/service_management.py").read_text(encoding="utf-8")
+    body = source.split("async def clients_list", 1)[1].split(
+        '@router.callback_query(F.data.regexp(r"^service_client:', 1
+    )[0]
+    assert 'func.count(Group.id).label("groups_count")' in body
+    assert ".group_by(Group.owner_telegram_id)" in body
+    assert "for user, groups_count in rows:" in body
+    assert "for user in users:" not in body
+    assert "where(Group.owner_telegram_id == user.telegram_id)" not in body
