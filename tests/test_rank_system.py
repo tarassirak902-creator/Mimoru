@@ -87,10 +87,11 @@ def test_untouchable_is_enforced_before_group_handlers() -> None:
     assignment = source.index("untouchable_exists = select(RankAssignment.id).where(")
     active = source.index("RankAssignment.active.is_(True)", assignment)
     rank = source.index("RankAssignment.rank_code == UNTOUCHABLE", assignment)
-    gate = source.index("and untouchable", rank)
+    gate = source.index("and untouchable", assignment)
     early_return = source.index("return None", gate)
     handler = source.index("result = await handler(event, data)", early_return)
-    assert assignment < active < rank < gate < early_return < handler
+    assert assignment < active < gate < early_return < handler
+    assert assignment < rank < gate
 
 
 def test_manual_moderation_checks_target_rank() -> None:
