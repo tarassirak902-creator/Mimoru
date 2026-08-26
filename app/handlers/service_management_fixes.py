@@ -218,26 +218,6 @@ async def legacy_promo_off_serialized(message: Message, session: AsyncSession) -
     await message.answer(f"✅ Промокод {promo.code} отключён.")
 
 
-@router.callback_query(F.data.regexp(r"^service_client_action:\d+:(block|unblock)$"))
-async def client_action_serialized(callback: CallbackQuery, session: AsyncSession) -> None:
-    if not is_service_owner(callback.from_user.id):
-        await callback.answer("Нет доступа.", show_alert=True)
-        return
-    _, raw_tid, action = callback.data.split(":")
-    result = await set_client_blocked(
-        session,
-        telegram_id=int(raw_tid),
-        blocked=action == "block",
-    )
-    if result is None:
-        await callback.answer("Клиент не найден.", show_alert=True)
-        return
-    callback.data = f"service_client:{raw_tid}"
-    from app.handlers.service_management import client_card
-
-    await client_card(callback, session)
-
-
 @router.message(F.chat.type == "private", F.text.regexp(r"(?i)^заблокировать клиента \d+$"))
 async def legacy_block_client_serialized(message: Message, session: AsyncSession) -> None:
     if message.from_user is None or not is_service_owner(message.from_user.id):
