@@ -49,16 +49,17 @@ async def track_group_member(
             "last_checked_at": now if checked else GroupMember.last_checked_at,
         },
     )
+    if return_row:
+        result = await session.execute(
+            stmt.returning(GroupMember),
+            execution_options={"populate_existing": True},
+        )
+        row = result.scalar_one()
+        await session.flush()
+        return row
     await session.execute(stmt)
     await session.flush()
-    if not return_row:
-        return None
-    return await session.scalar(
-        select(GroupMember).where(
-            GroupMember.group_id == group_id,
-            GroupMember.user_telegram_id == tg_user.id,
-        )
-    )
+    return None
 
 
 async def mark_member_presence(
