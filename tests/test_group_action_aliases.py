@@ -31,11 +31,12 @@ def test_aggregate_information_is_limited_to_real_admin_roles() -> None:
 
 
 def test_sensitive_aliases_are_guarded_by_live_rank_access() -> None:
-    source = Path("app/handlers/rank_legacy_guard.py").read_text(encoding="utf-8")
+    source = Path("app/middlewares_rank_safety.py").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
     assert "class SensitiveGroupAliasAccessMiddleware" in source
     assert "get_actor_rank_with_access(bot, session, group, user.id)" in source
     assert "actor.code not in group_action_aliases.ADMIN_INFO_RANKS" in source
-    assert "group_action_aliases.router.message.middleware(SensitiveGroupAliasAccessMiddleware())" in source
+    assert "group_action_aliases.router.message.middleware(sensitive_alias_access_middleware)" in main
     assert "group_action_aliases.GROUP_STATS_ALIASES" in source
     assert "group_action_aliases.ALL_BANS_ALIASES" in source
     assert "group_action_aliases.ALL_MUTES_ALIASES" in source
