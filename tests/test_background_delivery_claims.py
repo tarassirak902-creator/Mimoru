@@ -110,7 +110,7 @@ def test_leader_runs_hardened_delivery_scheduler() -> None:
     leader = (ROOT / "app/services/background_leader.py").read_text(encoding="utf-8")
     scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
     assert "from app.tasks_scheduler import background_loop" in leader
-    assert "from app.tasks_delivery import send_scheduled_messages" in scheduler
     assert "from app.tasks_delivery import (" in scheduler
+    assert "send_scheduled_messages," in scheduler
     assert "send_daily_reports," in scheduler
     assert "send_subscription_notices," in scheduler
