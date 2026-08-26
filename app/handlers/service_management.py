@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DailyStat, Group, GroupMember, GroupSubscriptionEvent, Payment, User
 from app.services.access import is_service_owner
+from app.services.client_access import set_client_blocked
 from app.services.group_health import calculate_group_health
 from app.services.plans import effective_plan, remaining_days, subscription_state
 from app.services.ui import panel_header
@@ -80,27 +81,35 @@ async def clients_list(callback: CallbackQuery, session: AsyncSession) -> None:
         await callback.answer("Нет доступа.", show_alert=True)
         return
     kind = callback.data.rsplit(":", 1)[1]
-    query = select(User)
+    group_counts = (
+        select(
+            Group.owner_telegram_id.label("owner_id"),
+            func.count(Group.id).label("groups_count"),
+        )
+        .where(Group.owner_telegram_id.is_not(None))
+        .group_by(Group.owner_telegram_id)
+        .subquery()
+    )
+    query = (
+        select(User, func.coalesce(group_counts.c.groups_count, 0))
+        .outerjoin(group_counts, group_counts.c.owner_id == User.telegram_id)
+    )
     if kind == "blocked":
         query = query.where(User.service_blocked.is_(True))
     elif kind == "owners":
-        owner_ids = select(Group.owner_telegram_id).where(Group.owner_telegram_id.is_not(None))
-        query = query.where(User.telegram_id.in_(owner_ids))
-    users = list((await session.scalars(query.order_by(User.created_at.desc()).limit(50))).all())
+        query = query.where(group_counts.c.owner_id.is_not(None))
+    rows = list((await session.execute(query.order_by(User.created_at.desc()).limit(50))).all())
     buttons: list[list[InlineKeyboardButton]] = []
-    for user in users:
-        groups_count = int(await session.scalar(
-            select(func.count()).select_from(Group).where(Group.owner_telegram_id == user.telegram_id)
-        ) or 0)
+    for user, groups_count in rows:
         mark = "🚫" if user.service_blocked else "👤"
         buttons.append([InlineKeyboardButton(
-            text=f"{mark} {_user_name(user, user.telegram_id)[:32]} · {groups_count} гр.",
+            text=f"{mark} {_user_name(user, user.telegram_id)[:32]} · {int(groups_count)} гр.",
             callback_data=f"service_client:{user.telegram_id}",
         )])
     buttons.append([_back("service:clients", "◀️ К клиентам")])
     title = {"all": "Все пользователи", "owners": "Владельцы групп", "blocked": "Заблокированные"}[kind]
     await callback.message.edit_text(
-        panel_header(title, f"Найдено: {len(users)}. Нажмите человека, чтобы открыть карточку."),
+        panel_header(title, f"Найдено: {len(rows)}. Нажмите человека, чтобы открыть карточку."),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await callback.answer()
@@ -204,16 +213,15 @@ async def client_action(callback: CallbackQuery, session: AsyncSession) -> None:
         return
     _, telegram_id, action = callback.data.split(":")
     tid = int(telegram_id)
-    user = await session.scalar(select(User).where(User.telegram_id == tid))
-    if user is None:
+    result = await set_client_blocked(
+        session,
+        telegram_id=tid,
+        blocked=action == "block",
+    )
+    if result is None:
         await callback.answer("Клиент не найден.", show_alert=True)
         return
-    user.service_blocked = action == "block"
-    if action == "block":
-        groups = list((await session.scalars(select(Group).where(Group.owner_telegram_id == tid))).all())
-        for group in groups:
-            group.is_active = False
-    await session.commit()
+    callback.data = f"service_client:{tid}"
     await client_card(callback, session)
 
 
