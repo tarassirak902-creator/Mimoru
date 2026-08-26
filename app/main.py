@@ -31,6 +31,7 @@ from app.handlers import kick_retirement
 from app.health import HealthServer
 from app.middlewares import DatabaseMiddleware
 from app.middlewares_group_mutation import GroupMutationLockMiddleware
+from app.middlewares_performance import SlowUpdateLoggingMiddleware
 from app.middlewares_rank_access import RankAccessModeMiddleware
 from app.middlewares_rank_safety import RankMutationLockMiddleware, SensitiveGroupAliasAccessMiddleware
 from app.reply_safety import CancelledReplyMiddleware
@@ -172,12 +173,14 @@ async def main() -> None:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     health = HealthServer(redis, settings.health_host, settings.health_port)
     dp = Dispatcher(redis=redis)
+    slow_update_middleware = SlowUpdateLoggingMiddleware()
     cancelled_reply_middleware = CancelledReplyMiddleware(redis)
     db_middleware = DatabaseMiddleware()
     rank_access_middleware = RankAccessModeMiddleware()
     group_mutation_lock_middleware = GroupMutationLockMiddleware()
     sensitive_alias_access_middleware = SensitiveGroupAliasAccessMiddleware()
     rank_mutation_lock_middleware = RankMutationLockMiddleware()
+    dp.update.outer_middleware(slow_update_middleware)
     dp.message.outer_middleware(cancelled_reply_middleware)
     dp.message.outer_middleware(db_middleware)
     dp.edited_message.outer_middleware(db_middleware)
