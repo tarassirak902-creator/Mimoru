@@ -39,22 +39,16 @@ async def expire_punishments(bot: Bot, redis: Redis) -> None:
     now = datetime.now(timezone.utc)
 
     async with SessionFactory() as session:
-        candidate_ids = list((await session.scalars(
-            select(Punishment.id).where(
+        candidates = list((await session.execute(
+            select(Punishment.id, Punishment.group_id).where(
                 Punishment.active.is_(True),
                 Punishment.ends_at.is_not(None),
                 Punishment.ends_at <= now,
             )
         )).all())
 
-    for punishment_id in candidate_ids:
+    for punishment_id, group_id in candidates:
         async with SessionFactory() as session:
-            group_id = await session.scalar(
-                select(Punishment.group_id).where(Punishment.id == punishment_id)
-            )
-            if group_id is None:
-                continue
-
             group = await session.scalar(
                 select(Group).where(Group.id == group_id).with_for_update()
             )
@@ -99,8 +93,6 @@ async def expire_punishments(bot: Bot, redis: Redis) -> None:
                         f"{punishment.user_telegram_id}"
                     )
                     if await redis.get(captcha_key) is not None:
-                        # CAPTCHA/required-channel admission still owns the
-                        # Telegram restriction. Only retire the expired mute.
                         await session.commit()
                         continue
                     await bot.restrict_chat_member(
