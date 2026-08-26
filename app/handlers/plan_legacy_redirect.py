@@ -4,13 +4,11 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.handlers import promo_redemption
 from app.handlers.promo_redemption import redeem_code_for_group
 from app.services.promos import normalize_promo_code
 
 
 router = Router(name=__name__)
-router.include_router(promo_redemption.router)
 
 
 @router.message(
