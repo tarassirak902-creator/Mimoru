@@ -7,10 +7,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DailyStat, Group, GroupMember, GroupSubscriptionEvent, Payment, User
+from app.db.models import DailyStat, Group, GroupMember, Payment, User
 from app.services.access import is_service_owner
 from app.services.client_access import set_client_blocked
 from app.services.group_health import calculate_group_health
+from app.services.manual_plans import apply_manual_plan
 from app.services.plans import effective_plan, remaining_days, subscription_state
 from app.services.ui import panel_header
 
@@ -471,28 +472,18 @@ async def service_plan_action(callback: CallbackQuery, session: AsyncSession) ->
         await callback.answer("Нет доступа.", show_alert=True)
         return
     _, raw_gid, plan_code, raw_days = callback.data.split(":")
-    group = await session.get(Group, int(raw_gid))
+    days = int(raw_days)
+    group = await apply_manual_plan(
+        session,
+        group_id=int(raw_gid),
+        actor_id=callback.from_user.id,
+        plan_code=plan_code,
+        days=days,
+    )
     if group is None:
         await callback.answer("Группа не найдена.", show_alert=True)
         return
-    now = datetime.now(timezone.utc)
-    if plan_code == "free":
-        group.plan_code = "free"
-        group.plan_expires_at = None
-    else:
-        days = int(raw_days)
-        current_code = effective_plan(group)
-        start = group.plan_expires_at if current_code == plan_code and group.plan_expires_at and group.plan_expires_at > now else now
-        group.plan_code = plan_code
-        group.plan_expires_at = start + timedelta(days=days)
-    session.add(GroupSubscriptionEvent(
-        group_id=group.id,
-        actor_telegram_id=callback.from_user.id,
-        event_type="admin_grant",
-        plan_code=plan_code,
-        expires_at=group.plan_expires_at,
-    ))
-    await session.commit()
+    callback.data = f"service_plan:{group.id}"
     await service_plan(callback, session)
 
 
