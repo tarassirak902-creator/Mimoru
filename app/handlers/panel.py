@@ -33,10 +33,10 @@ COMMANDS_TEXT = (
     panel_header("Команды и помощь")
     + "\n\n<b>Модерация — ответом на сообщение</b>\n"
     "<code>бан</code> или <code>бан 7д</code>, <code>разбан</code>, <code>мут 2ч</code>, "
-    "<code>размут</code>, <code>кик</code>, <code>пред</code>, "
+    "<code>размут</code>, <code>пред</code>, "
     "<code>снять пред</code>, <code>преды</code>, <code>инфо</code>, "
     "<code>история</code>, <code>удалить</code>.\n"
-    "Для предупреждения, мута, кика и бана Mimoru предложит причины кнопками.\n\n"
+    "Для предупреждения, мута и бана Mimoru предложит причины кнопками.\n\n"
     "<b>Защита</b>\n"
     "<code>антифлуд вкл/выкл</code>, <code>антифлуд 6 за 10с</code>\n"
     "<code>ссылки вкл/выкл</code>, <code>повторы вкл/выкл</code>, "
@@ -358,4 +358,3 @@ async def plan_history(callback: CallbackQuery, session: AsyncSession) -> None:
         lines.append(f"{status} {date} · {row.plan_code.upper()} · {row.amount} ⭐ · {row.status}")
     text = panel_header("История платежей", group.title) + "\n\n" + ("\n".join(lines) if lines else "Платежей пока нет.")
     await callback.message.edit_text(text, reply_markup=subscription_back(group.id)); await callback.answer()
-
