@@ -12,8 +12,8 @@ def test_delete_lock_is_attached_to_primary_group_router() -> None:
 
 def test_reply_delete_is_locked_before_authorization_and_side_effect() -> None:
     middleware = (ROOT / "app/middlewares_group_mutation.py").read_text(encoding="utf-8")
-    assert 'F.text.casefold().in_({"удалить", "стереть", "удали"})' in middleware
-    assert "F.reply_to_message" in middleware
+    assert '_DELETE_WORDS = {"удалить", "стереть", "удали"}' in middleware
+    assert "event.reply_to_message is not None and text in _DELETE_WORDS" in middleware
     assert ".with_for_update()" in middleware
 
     group = (ROOT / "app/handlers/group.py").read_text(encoding="utf-8")
