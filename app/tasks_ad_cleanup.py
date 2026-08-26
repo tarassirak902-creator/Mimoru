@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 import structlog
 from aiogram import Bot
@@ -14,6 +15,12 @@ from app.db.session import SessionFactory
 CLEANUP_PENDING = "cleanup_pending"
 
 
+class _CleanupClaim(NamedTuple):
+    order_id: int
+    group_id: int
+    published_message_id: int | None
+
+
 def _message_definitely_absent(error: TelegramBadRequest) -> bool:
     """Recognize only Telegram's explicit already-absent delete result.
 
@@ -24,7 +31,7 @@ def _message_definitely_absent(error: TelegramBadRequest) -> bool:
     return "message to delete not found" in text
 
 
-async def _claim_due_order(order_id: int, now: datetime) -> AdOrder | None:
+async def _claim_due_order(order_id: int, now: datetime) -> _CleanupClaim | None:
     """Persist cleanup ownership before the Telegram delete side effect."""
     async with SessionFactory() as session:
         order = await session.scalar(
@@ -32,22 +39,24 @@ async def _claim_due_order(order_id: int, now: datetime) -> AdOrder | None:
         )
         if order is None:
             return None
-        if order.status == CLEANUP_PENDING:
-            return order
-        if order.status != "published" or order.published_at is None:
-            return None
         placement = await session.get(AdPlacement, order.placement_id)
         if placement is None:
-            order.status = "completed"
-            order.completed_at = now
-            await session.commit()
+            if order.status != CLEANUP_PENDING:
+                order.status = "completed"
+                order.completed_at = now
+                await session.commit()
+            return None
+        if order.status == CLEANUP_PENDING:
+            return _CleanupClaim(order.id, placement.group_id, order.published_message_id)
+        if order.status != "published" or order.published_at is None:
             return None
         expires_at = order.published_at + timedelta(hours=max(1, placement.duration_hours))
         if expires_at > now:
             return None
         order.status = CLEANUP_PENDING
+        claim = _CleanupClaim(order.id, placement.group_id, order.published_message_id)
         await session.commit()
-        return order
+        return claim
 
 
 async def _finish_cleanup(order_id: int, now: datetime) -> None:
@@ -81,24 +90,23 @@ async def complete_ad_orders(bot: Bot) -> None:
         )).all())
 
     for order_id in candidate_ids:
-        order = await _claim_due_order(order_id, now)
-        if order is None:
+        claim = await _claim_due_order(order_id, now)
+        if claim is None:
             continue
 
         async with SessionFactory() as session:
-            placement = await session.get(AdPlacement, order.placement_id)
-            group = await session.get(Group, placement.group_id) if placement is not None else None
+            group = await session.get(Group, claim.group_id)
 
-        if placement is None or group is None or order.published_message_id is None:
-            await _finish_cleanup(order.id, now)
+        if group is None or claim.published_message_id is None:
+            await _finish_cleanup(claim.order_id, now)
             continue
 
         try:
-            await bot.delete_message(group.telegram_chat_id, order.published_message_id)
+            await bot.delete_message(group.telegram_chat_id, claim.published_message_id)
         except TelegramForbiddenError as error:
             log.warning(
                 "ad_expiry_delete_retryable",
-                order_id=order.id,
+                order_id=claim.order_id,
                 group_id=group.id,
                 error=str(error),
             )
@@ -107,15 +115,15 @@ async def complete_ad_orders(bot: Bot) -> None:
             if not _message_definitely_absent(error):
                 log.warning(
                     "ad_expiry_delete_retryable",
-                    order_id=order.id,
+                    order_id=claim.order_id,
                     group_id=group.id,
                     error=str(error),
                 )
                 continue
             log.info(
                 "ad_expiry_message_already_absent",
-                order_id=order.id,
+                order_id=claim.order_id,
                 group_id=group.id,
             )
 
-        await _finish_cleanup(order.id, now)
+        await _finish_cleanup(claim.order_id, now)
