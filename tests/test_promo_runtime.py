@@ -42,7 +42,7 @@ def test_redemption_enforces_owner_and_one_use_per_user() -> None:
 
 
 def test_user_runtime_exposes_stateless_owned_group_choice() -> None:
-    source = (ROOT / "app/handlers/plan_legacy_redirect.py").read_text(encoding="utf-8")
+    source = (ROOT / "app/handlers/promo_redemption.py").read_text(encoding="utf-8")
     assert '@router.message(Command("promo"), F.chat.type == "private")' in source
     assert "Group.owner_telegram_id == message.from_user.id" in source
     assert 'callback_data=f"promo_redeem:{group.id}:{promo_id}"' in source
@@ -55,14 +55,17 @@ def test_user_runtime_exposes_stateless_owned_group_choice() -> None:
     assert "await session.commit()" in source
     assert "await session.rollback()" not in source
 
+    main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert main.index("promo_redemption.router") < main.index("plan_legacy_redirect.router")
 
-def test_legacy_promo_text_routes_through_atomic_service_before_old_handler() -> None:
+
+def test_legacy_promo_text_routes_through_atomic_service() -> None:
     source = (ROOT / "app/handlers/plan_legacy_redirect.py").read_text(encoding="utf-8")
     handler = source.split("async def legacy_promo_text", 1)[1].split(
         "@router.callback_query", 1
     )[0]
     assert 'F.text.regexp(r"(?i)^промокод [A-Za-z0-9_-]+ \\d+$")' in source
-    assert "await _redeem_code_for_group(" in handler
+    assert "await redeem_code_for_group(" in handler
     assert "group.plan_code" not in handler
     assert "group.plan_expires_at" not in handler
     assert "PromoCodeUse(" not in handler
@@ -107,7 +110,7 @@ def test_legacy_promo_disable_shares_locked_service_owner_path() -> None:
 
 
 def test_runtime_help_documents_both_promo_flows() -> None:
-    user_source = (ROOT / "app/handlers/plan_legacy_redirect.py").read_text(encoding="utf-8")
+    user_source = (ROOT / "app/handlers/promo_redemption.py").read_text(encoding="utf-8")
     owner_source = (ROOT / "app/handlers/service_management_fixes.py").read_text(encoding="utf-8")
     assert "/promo START-7" in user_source
     assert "/promo_create CODE PLAN DAYS MAX_USES [YYYY-MM-DD]" in owner_source
