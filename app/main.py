@@ -26,10 +26,11 @@ panel_keyboards.automation_menu = automation_menu
 panel_keyboards.operations_menu = operations_menu
 panel_keyboards.group_health_menu = group_health_menu
 
-from app.handlers import ad_invoice_safety, ad_legacy_payment_guard, ad_market_atomic, ad_market_v3, ad_navigation, admin_access_mode, advanced, audit, automation, billing, campaign_spam, client_management, common, contextual_back, control_center, deferred_bans, deleted_accounts, member_center, member_navigation, dashboard, edit_protection, features, fun_bot_guard, fun_commands, fun_extras, fun_help, fun_preferences, fun_social, fun_stats, group, group_action_aliases, group_commands, group_directory, group_lookup, group_onboarding_flow, group_owner_mutation_fixes, group_shortcuts, group_stats_v2, hardening, home_panel, input_safety, invite_operation_guard, join_review_guard, join_requests, member_profile_v2, members, mentions, moderation_command_modes, moderation_durable_guard, navigation, navigation_fixes, operations, operations_center, onboarding, panel, permission_modes, plan_catalog, plan_directory, plan_legacy_redirect, protection, quarantine, rank_legacy_guard, rank_policy_fix, rank_provisioning_handlers, rank_text_commands, reason_admin, required_direct, safety, service_admin, service_broadcast, service_group_access, service_management, service_management_fixes, service_owner_directory, setup_legacy_redirect, slow_mode, sender_chats, mimoru_identity, telegram_roles, wizard_navigation
+from app.handlers import ad_invoice_safety, ad_legacy_payment_guard, ad_market_atomic, ad_market_v3, ad_navigation, admin_access_mode, advanced, audit, automation, billing, campaign_spam, client_management, common, contextual_back, control_center, deferred_bans, deleted_accounts, member_center, member_navigation, dashboard, edit_protection, features, fun_bot_guard, fun_commands, fun_extras, fun_help, fun_preferences, fun_social, fun_stats, group, group_action_aliases, group_commands, group_directory, group_lookup, group_onboarding_flow, group_shortcuts, group_stats_v2, hardening, home_panel, input_safety, invite_operation_guard, join_review_guard, join_requests, member_profile_v2, members, mentions, moderation_command_modes, moderation_durable_guard, navigation, navigation_fixes, operations, operations_center, onboarding, panel, permission_modes, plan_catalog, plan_directory, plan_legacy_redirect, protection, quarantine, rank_legacy_guard, rank_policy_fix, rank_provisioning_handlers, rank_text_commands, reason_admin, required_direct, safety, service_admin, service_broadcast, service_group_access, service_management, service_management_fixes, service_owner_directory, setup_legacy_redirect, slow_mode, sender_chats, mimoru_identity, telegram_roles, wizard_navigation
 from app.handlers import kick_retirement
 from app.health import HealthServer
 from app.middlewares import DatabaseMiddleware
+from app.middlewares_group_mutation import GroupMutationLockMiddleware
 from app.middlewares_rank_access import RankAccessModeMiddleware
 from app.reply_safety import CancelledReplyMiddleware
 from app.services.activity_tracking import track_outgoing_group_result
@@ -173,6 +174,7 @@ async def main() -> None:
     cancelled_reply_middleware = CancelledReplyMiddleware(redis)
     db_middleware = DatabaseMiddleware()
     rank_access_middleware = RankAccessModeMiddleware()
+    group_mutation_lock_middleware = GroupMutationLockMiddleware()
     dp.message.outer_middleware(cancelled_reply_middleware)
     dp.message.outer_middleware(db_middleware)
     dp.edited_message.outer_middleware(db_middleware)
@@ -184,6 +186,7 @@ async def main() -> None:
     for rank_router in (admin_access_mode.router, telegram_roles.router):
         rank_router.callback_query.middleware(rank_access_middleware)
         rank_router.message.middleware(rank_access_middleware)
+    group.router.message.middleware(group_mutation_lock_middleware)
     dp.include_routers(
         fun_preferences.router,
         fun_extras.router,
@@ -244,7 +247,6 @@ async def main() -> None:
         service_admin.router,
         dashboard.router,
         required_direct.router,
-        group_owner_mutation_fixes.router,
         group.router,
         audit.router,
         hardening.router,
