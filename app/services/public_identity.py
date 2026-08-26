@@ -33,8 +33,6 @@ def _utf16_len(value: str) -> int:
 
 
 def _visible_name(user: Any) -> str | None:
-    # The public label should look like the person looks in Telegram. Prefer the profile
-    # display name and only fall back to @username when no display name is available.
     full_name = (getattr(user, "full_name", None) or "").strip()
     if full_name:
         return full_name
@@ -48,8 +46,6 @@ def _visible_name(user: Any) -> str | None:
 
 
 async def _stored_visible_name(user_id: int) -> str | None:
-    # Import lazily so importing this output helper in tests does not initialize
-    # application settings (and require BOT_TOKEN) before the fallback is used.
     from app.db.session import SessionFactory
 
     async with SessionFactory() as session:
@@ -63,9 +59,6 @@ async def _stored_visible_name(user_id: int) -> str | None:
 
 
 async def _resolve_visible_name(bot: Bot, chat_id: int | str | None, user_id: int) -> str:
-    # For real group/supergroup chat IDs prefer Telegram's current profile so renamed users are
-    # displayed exactly as Telegram currently knows them. Private/panel messages cannot resolve a
-    # third party with getChatMember, so they use Mimoru's last stored Telegram profile instead.
     if isinstance(chat_id, int) and chat_id < 0:
         try:
             member = await bot.get_chat_member(chat_id, user_id)
@@ -94,11 +87,13 @@ async def _replace_text_identities(
     chat_id: int | str | None,
     text: str,
     include_legacy_id: bool,
+    resolved_labels: dict[int, str] | None = None,
 ) -> tuple[str, list[MessageEntity]]:
     pattern = _replaceable_pattern(text, include_legacy_id=include_legacy_id)
     if pattern is None:
         return text, []
 
+    labels = resolved_labels if resolved_labels is not None else {}
     chunks: list[str] = []
     entities: list[MessageEntity] = []
     cursor = 0
@@ -109,7 +104,10 @@ async def _replace_text_identities(
             cursor = match.end()
             continue
         user_id = int(raw_id)
-        label = await _resolve_visible_name(bot, chat_id, user_id)
+        label = labels.get(user_id)
+        if label is None:
+            label = await _resolve_visible_name(bot, chat_id, user_id)
+            labels[user_id] = label
 
         prefix = "".join(chunks)
         chunks.append(label)
@@ -142,6 +140,7 @@ async def replace_public_group_id_labels(bot: Bot, method: TelegramMethod[Any]) 
     chat_id = getattr(method, "chat_id", None)
     include_legacy_id = isinstance(chat_id, int) and chat_id < 0
     updates: dict[str, Any] = {}
+    resolved_labels: dict[int, str] = {}
 
     text = getattr(method, "text", None)
     current_entities = getattr(method, "entities", None)
@@ -155,6 +154,7 @@ async def replace_public_group_id_labels(bot: Bot, method: TelegramMethod[Any]) 
             chat_id=chat_id,
             text=text,
             include_legacy_id=include_legacy_id,
+            resolved_labels=resolved_labels,
         )
         updates["text"] = new_text
         if hasattr(method, "entities"):
@@ -172,6 +172,7 @@ async def replace_public_group_id_labels(bot: Bot, method: TelegramMethod[Any]) 
             chat_id=chat_id,
             text=caption,
             include_legacy_id=include_legacy_id,
+            resolved_labels=resolved_labels,
         )
         updates["caption"] = new_caption
         if hasattr(method, "caption_entities"):
