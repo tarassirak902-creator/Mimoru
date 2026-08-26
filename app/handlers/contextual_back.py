@@ -9,11 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DailyStat, Group, GroupMember, Payment, User
 from app.handlers.member_center import _member_card, owned_group
-from app.handlers.service_management_fixes import _apply_manual_plan
 from app.services.access import is_service_owner
 from app.services.client_access import set_client_blocked, set_group_service_active
 from app.services.group_health import calculate_group_health
 from app.services.group_refs import group_reference_label
+from app.services.manual_plans import apply_manual_plan
 from app.services.plans import effective_plan, remaining_days, subscription_state
 from app.services.ui import panel_header
 
@@ -316,7 +316,7 @@ async def service_plan_apply_context(callback: CallbackQuery, session: AsyncSess
     if not is_service_owner(callback.from_user.id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_gid),
         actor_id=callback.from_user.id,
