@@ -9,9 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Group, GroupSubscriptionEvent, PromoCode
+from app.db.models import Group, PromoCode
 from app.services.access import is_service_owner
 from app.services.client_access import set_client_blocked
+from app.services.manual_plans import apply_manual_plan
 from app.services.plans import effective_plan
 from app.services.promos import normalize_promo_code
 from app.services.ui import clean_ui_text, panel_header
@@ -38,48 +39,6 @@ def _promo_help() -> str:
         "/promo_off CODE — отключить код\n\n"
         "PLAN: trial, standard или pro. Дата окончания необязательна и задаётся в UTC."
     )
-
-
-async def _locked_group(session: AsyncSession, group_id: int) -> Group | None:
-    return await session.scalar(
-        select(Group).where(Group.id == group_id).with_for_update()
-    )
-
-
-async def _apply_manual_plan(
-    session: AsyncSession,
-    *,
-    group_id: int,
-    actor_id: int,
-    plan_code: str,
-    days: int,
-) -> Group | None:
-    """Serialize all manual plan changes with payment/promo group mutations."""
-    group = await _locked_group(session, group_id)
-    if group is None:
-        return None
-    now = datetime.now(timezone.utc)
-    if plan_code == "free":
-        group.plan_code = "free"
-        group.plan_expires_at = None
-    else:
-        current_code = effective_plan(group)
-        start = (
-            group.plan_expires_at
-            if current_code == plan_code and group.plan_expires_at and group.plan_expires_at > now
-            else now
-        )
-        group.plan_code = plan_code
-        group.plan_expires_at = start + timedelta(days=days)
-    session.add(GroupSubscriptionEvent(
-        group_id=group.id,
-        actor_telegram_id=actor_id,
-        event_type="admin_grant",
-        plan_code=plan_code,
-        expires_at=group.plan_expires_at,
-    ))
-    await session.commit()
-    return group
 
 
 async def _render_plan_result(callback: CallbackQuery, group: Group) -> None:
@@ -253,7 +212,7 @@ async def grant_plan_serialized(message: Message, session: AsyncSession) -> None
     if days < 0 or days > 3650:
         await message.answer("Срок тарифа должен быть от 0 до 3650 дней.")
         return
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_group_id),
         actor_id=message.from_user.id,
@@ -278,7 +237,7 @@ async def grant_trial_serialized(message: Message, session: AsyncSession) -> Non
     if not 1 <= days <= 3650:
         await message.answer("Срок TRIAL должен быть от 1 до 3650 дней.")
         return
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_group_id),
         actor_id=message.from_user.id,
@@ -303,7 +262,7 @@ async def service_plan_grant_serialized(callback: CallbackQuery, session: AsyncS
     if (plan_code, days) not in {("trial", 7), ("standard", 30), ("pro", 30), ("free", 0)}:
         await callback.answer("Некорректный тариф.", show_alert=True)
         return
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_gid),
         actor_id=callback.from_user.id,
@@ -326,7 +285,7 @@ async def service_plan_apply_serialized(callback: CallbackQuery, session: AsyncS
     if (plan_code, days) not in {("trial", 7), ("standard", 30), ("pro", 30), ("free", 0)}:
         await callback.answer("Некорректный тариф.", show_alert=True)
         return
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_gid),
         actor_id=callback.from_user.id,
@@ -346,7 +305,7 @@ async def service_plan_action_fixed(callback: CallbackQuery, session: AsyncSessi
         return
     _, raw_gid, plan_code, raw_days = callback.data.split(":")
     days = int(raw_days)
-    group = await _apply_manual_plan(
+    group = await apply_manual_plan(
         session,
         group_id=int(raw_gid),
         actor_id=callback.from_user.id,
