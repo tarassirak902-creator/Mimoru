@@ -32,6 +32,7 @@ from app.health import HealthServer
 from app.middlewares import DatabaseMiddleware
 from app.middlewares_group_mutation import GroupMutationLockMiddleware
 from app.middlewares_rank_access import RankAccessModeMiddleware
+from app.middlewares_rank_safety import RankMutationLockMiddleware, SensitiveGroupAliasAccessMiddleware
 from app.reply_safety import CancelledReplyMiddleware
 from app.services.activity_tracking import track_outgoing_group_result
 from app.services.ad_market_schema import ensure_ad_market_schema
@@ -175,6 +176,8 @@ async def main() -> None:
     db_middleware = DatabaseMiddleware()
     rank_access_middleware = RankAccessModeMiddleware()
     group_mutation_lock_middleware = GroupMutationLockMiddleware()
+    sensitive_alias_access_middleware = SensitiveGroupAliasAccessMiddleware()
+    rank_mutation_lock_middleware = RankMutationLockMiddleware()
     dp.message.outer_middleware(cancelled_reply_middleware)
     dp.message.outer_middleware(db_middleware)
     dp.edited_message.outer_middleware(db_middleware)
@@ -187,6 +190,9 @@ async def main() -> None:
         rank_router.callback_query.middleware(rank_access_middleware)
         rank_router.message.middleware(rank_access_middleware)
     group.router.message.middleware(group_mutation_lock_middleware)
+    group_action_aliases.router.message.middleware(sensitive_alias_access_middleware)
+    telegram_roles.router.callback_query.middleware(rank_mutation_lock_middleware)
+    telegram_roles.router.message.middleware(rank_mutation_lock_middleware)
     dp.include_routers(
         fun_preferences.router,
         fun_extras.router,
