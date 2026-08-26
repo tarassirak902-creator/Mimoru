@@ -84,8 +84,13 @@ def test_user_facing_rank_labels_exist() -> None:
 
 def test_untouchable_is_enforced_before_group_handlers() -> None:
     source = open("app/middlewares.py", encoding="utf-8").read()
-    assert "await is_untouchable(session, group.id, tg_user.id)" in source
-    assert "return None" in source
+    assignment = source.index("untouchable_exists = select(RankAssignment.id).where(")
+    active = source.index("RankAssignment.active.is_(True)", assignment)
+    rank = source.index("RankAssignment.rank_code == UNTOUCHABLE", assignment)
+    gate = source.index("and untouchable", rank)
+    early_return = source.index("return None", gate)
+    handler = source.index("result = await handler(event, data)", early_return)
+    assert assignment < active < rank < gate < early_return < handler
 
 
 def test_manual_moderation_checks_target_rank() -> None:
