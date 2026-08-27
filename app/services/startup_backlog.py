@@ -10,7 +10,7 @@ from aiogram.types import Message, Update
 from redis.asyncio import Redis
 
 
-CRITICAL_MODERATION_TTL_SECONDS = 300
+CRITICAL_MODERATION_TTL_SECONDS = 600
 RECOVERY_NOTICE_USERS_KEY = "mimoru:recovery:notice_users"
 RECOVERY_CRITICAL_CLAIM_PREFIX = "mimoru:recovery:critical_claim:"
 _RECOVERY_NOTICE_TEXT = (
@@ -77,7 +77,7 @@ async def drain_startup_backlog(
     """Drain queued Telegram updates before normal polling.
 
     Old UI/navigation updates are acknowledged and discarded. Only fresh group
-    moderation text commands (бан/мут/пред, <=5 minutes old) are fed through the
+    moderation text commands (бан/мут/пред, <=10 minutes old) are fed through the
     normal Dispatcher, with an update-id claim to prevent duplicate replay.
     """
     log = structlog.get_logger()
@@ -105,7 +105,6 @@ async def drain_startup_backlog(
                 dropped += 1
                 await _queue_recovery_notice(redis, update)
         if len(updates) < 100:
-            # One explicit offset call below confirms the final page too.
             break
 
     if offset is not None:
@@ -156,7 +155,6 @@ async def send_recovery_notices(bot: Bot, redis: Redis, stop_event: asyncio.Even
         except (TelegramForbiddenError, TelegramBadRequest):
             pass
         except Exception:
-            # Preserve the notice for a later retry if Telegram/network failed.
             await redis.sadd(RECOVERY_NOTICE_USERS_KEY, user_id)
             log.exception("recovery_notice_failed", user_id=user_id)
             return
