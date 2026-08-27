@@ -10,13 +10,29 @@ def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_game_router_runs_before_legacy_fun_handlers() -> None:
-    main = _source("app/main.py")
+def test_friendly_game_routers_are_the_production_social_implementation() -> None:
     preferences = _source("app/handlers/fun_preferences.py")
-    assert main.index("fun_preferences.router") < main.index("fun_social.router")
-    assert main.index("fun_preferences.router") < main.index("fun_commands.router")
+    social = _source("app/handlers/fun_social.py")
+    results = _source("app/game_friendly_results.py")
+    history = _source("app/game_friendly_history.py")
+    help_source = _source("app/handlers/fun_help.py")
+
     assert "router.include_router(game_friendly_results.router)" in preferences
     assert "router.include_router(game_friendly_history.router)" in preferences
+    assert "@router.message" not in social
+    assert "@router.callback_query" not in social
+    assert "from app.game_contracts import" in results
+    assert "from app.game_contracts import" in history
+    assert "from app.game_contracts import PROPOSALS" in help_source
+
+
+def test_proposal_callback_is_serialized_and_rejects_replay() -> None:
+    results = _source("app/game_friendly_results.py")
+    callback_block = results.split("async def friendly_answer", 1)[1].split("async def friendly_divorce", 1)[0]
+    assert ".with_for_update()" in callback_block
+    assert 'GameEvent.outcome == "pending"' in callback_block
+    assert '"На это предложение уже ответили."' in callback_block
+    assert 'event.outcome = "cancelled"' in callback_block
 
 
 def test_render_uses_clickable_mentions_without_raw_ids() -> None:
@@ -47,8 +63,6 @@ def test_proposals_and_results_have_multiple_variants_and_emoji() -> None:
 def test_user_facing_game_text_uses_mentions_not_raw_ids() -> None:
     results = _source("app/game_friendly_results.py")
     history = _source("app/game_friendly_history.py")
-    # Numeric IDs are intentionally retained in callback_data and DB lookups. The public renderer
-    # must convert identity placeholders to clickable tg:// mentions instead of interpolating them.
     assert "tg://user?id=" in results
     assert "tg://user?id=" in history
     assert "Пользователь {target_id}" not in results

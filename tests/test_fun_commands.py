@@ -1,8 +1,9 @@
 from pathlib import Path
 
 from app.db.fun_models import GroupMarriage
+from app.game_contracts import PROPOSALS
+from app.game_friendly_results import _proposal_markup
 from app.handlers.fun_commands import ACTIONS, FUN_ACTIONS, RANDOM_ACTIONS
-from app.handlers.fun_social import PROPOSALS, _proposal_markup
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,11 +51,14 @@ def test_social_actions_require_target_acceptance_and_callbacks_fit_telegram_lim
 
 def test_fun_handlers_do_not_swallow_unknown_reply_messages():
     fun = (ROOT / "app/handlers/fun_commands.py").read_text(encoding="utf-8")
+    friendly = (ROOT / "app/game_friendly_results.py").read_text(encoding="utf-8")
     social = (ROOT / "app/handlers/fun_social.py").read_text(encoding="utf-8")
     assert "F.text.casefold().in_(FUN_ACTIONS)" in fun
-    assert "F.text.casefold().in_(PROPOSAL_ACTIONS)" in social
+    assert "F.text.casefold().in_(PROPOSAL_ACTIONS)" in friendly
+    assert "@router.message" not in social
+    assert "@router.callback_query" not in social
     assert "@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text)" not in fun
-    assert "@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text)" not in social
+    assert "@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text)" not in friendly
 
 
 def test_marriage_is_group_scoped_and_persistent():
@@ -66,7 +70,9 @@ def test_marriage_is_group_scoped_and_persistent():
     assert '"group_marriages"' in migration
 
 
-def test_social_router_precedes_plain_fun_router():
+def test_friendly_router_precedes_plain_fun_router():
     main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    preferences = (ROOT / "app/handlers/fun_preferences.py").read_text(encoding="utf-8")
     block = main.split("dp.include_routers(", 1)[1]
-    assert block.index("fun_social.router") < block.index("fun_commands.router")
+    assert block.index("fun_preferences.router") < block.index("fun_commands.router")
+    assert "router.include_router(game_friendly_results.router)" in preferences

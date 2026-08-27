@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.fun_models import GameEvent, GroupMarriage
 from app.db.models import Group, User
-from app.handlers.fun_social import HISTORY_COMMANDS, HISTORY_TITLES, HISTORY_WORDS
+from app.game_contracts import HISTORY_COMMANDS, HISTORY_TITLES, HISTORY_WORDS
 
 router = Router(name=__name__)
 GROUP_TYPES = {"group", "supergroup"}
