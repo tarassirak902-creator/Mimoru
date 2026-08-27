@@ -1,46 +1,30 @@
 from pathlib import Path
 
 from app.db.fun_models import GroupMarriage
+from app.entertainment_contracts import ENTERTAINMENT_ACTIONS, RELATIONSHIP_ACTIONS, RETIRED_PSEUDO_GAMES
 from app.game_contracts import PROPOSALS
 from app.game_friendly_results import _proposal_markup
-from app.handlers.fun_commands import ACTIONS, FUN_ACTIONS, RANDOM_ACTIONS
+from app.handlers.fun_commands import RANDOM_ACTIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_absurd_fun_command_catalog_is_large_and_contains_requested_actions():
-    expected = {
-        "обнять",
-        "понюхать",
-        "понюхать волосы",
-        "пнуть под зад",
-        "дать подзатыльник",
-        "завернуть в плед",
-        "украсть носок",
-        "отправить на завод",
-        "превратить в дошик",
-        "наколдовать понос",
-        "дать вайфай",
-        "сделать админом",
-        "снять админку",
-        "поженить",
-        "засосать",
-        "соблазнить",
-        "зафрендзонить",
-    }
-    assert expected <= set(ACTIONS)
-    assert len(FUN_ACTIONS) >= 90
+def test_entertainment_catalog_contains_requested_actions_and_no_pseudo_games():
+    expected = {"обнять", "поцеловать", "ударить", "уебать", "выебать", "дать дошик", "покормить"}
+    assert expected <= ENTERTAINMENT_ACTIONS
+    assert RETIRED_PSEUDO_GAMES.isdisjoint(ENTERTAINMENT_ACTIONS)
+    assert RANDOM_ACTIONS == {}
 
 
-def test_random_games_have_multiple_outcomes():
-    for action in ("ограбить", "похитить", "подкатить", "ударить", "суд"):
-        assert action in RANDOM_ACTIONS
-        assert len(RANDOM_ACTIONS[action]) >= 3
+def test_family_relationship_domain_is_separate_from_games():
+    assert {"поссориться", "поругаться", "подраться", "помириться"} <= RELATIONSHIP_ACTIONS
+    assert {"пожениться", "выйти замуж", "сделать предложение"} <= set(PROPOSALS)
+    assert set(PROPOSALS.values())
+    assert all(kind == "marry" for kind, _ in PROPOSALS.values())
 
 
-def test_social_actions_require_target_acceptance_and_callbacks_fit_telegram_limit():
-    assert {"пожениться", "позвать на свидание", "признаться в любви", "предложить любовь", "дуэль", "драка"} <= set(PROPOSALS)
+def test_marriage_callbacks_fit_telegram_limit():
     markup = _proposal_markup("marry", 123456, 9876543210, 9876543211)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert all(callbacks)
@@ -49,16 +33,14 @@ def test_social_actions_require_target_acceptance_and_callbacks_fit_telegram_lim
     assert callbacks[1].endswith(":no")
 
 
-def test_fun_handlers_do_not_swallow_unknown_reply_messages():
+def test_legacy_pseudo_game_handlers_are_not_registered():
     fun = (ROOT / "app/handlers/fun_commands.py").read_text(encoding="utf-8")
     friendly = (ROOT / "app/game_friendly_results.py").read_text(encoding="utf-8")
-    social = (ROOT / "app/handlers/fun_social.py").read_text(encoding="utf-8")
-    assert "F.text.casefold().in_(FUN_ACTIONS)" in fun
-    assert "F.text.casefold().in_(PROPOSAL_ACTIONS)" in friendly
-    assert "@router.message" not in social
-    assert "@router.callback_query" not in social
-    assert "@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text)" not in fun
-    assert "@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text)" not in friendly
+    tasks = (ROOT / "app/tasks_fun.py").read_text(encoding="utf-8")
+    assert "@router.message" not in fun
+    assert "RANDOM_ACTIONS: dict[str, list[str]] = {}" in fun
+    assert "PROPOSAL_ACTIONS" in friendly
+    assert "random.choice(tuple(FUN_ACTIONS))" not in tasks
 
 
 def test_marriage_is_group_scoped_and_persistent():
@@ -70,9 +52,9 @@ def test_marriage_is_group_scoped_and_persistent():
     assert '"group_marriages"' in migration
 
 
-def test_friendly_router_precedes_plain_fun_router():
-    main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+def test_games_and_entertainment_have_separate_entrypoints():
     preferences = (ROOT / "app/handlers/fun_preferences.py").read_text(encoding="utf-8")
-    block = main.split("dp.include_routers(", 1)[1]
-    assert block.index("fun_preferences.router") < block.index("fun_commands.router")
-    assert "router.include_router(game_friendly_results.router)" in preferences
+    help_module = (ROOT / "app/handlers/fun_help.py").read_text(encoding="utf-8")
+    assert 'Command("games")' in preferences
+    assert 'OPEN_WORDS = {"развлечения", "развлекательные команды"}' in help_module
+    assert "Для настоящих игр используйте /games" in help_module
