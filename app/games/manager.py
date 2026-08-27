@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +44,18 @@ class GameManager:
             .order_by(GameSession.id.desc())
             .limit(1)
         )
+        if for_update:
+            query = query.with_for_update()
+        return await session.scalar(query)
+
+    async def get_game(
+        self,
+        session: AsyncSession,
+        *,
+        game_id: int,
+        for_update: bool = False,
+    ) -> GameSession | None:
+        query = select(GameSession).where(GameSession.id == game_id)
         if for_update:
             query = query.with_for_update()
         return await session.scalar(query)
@@ -102,6 +116,25 @@ class GameManager:
         await session.refresh(game)
         return game
 
+    async def list_players(
+        self,
+        session: AsyncSession,
+        *,
+        game_id: int,
+        for_update: bool = False,
+    ) -> list[GamePlayer]:
+        query = (
+            select(GamePlayer)
+            .where(
+                GamePlayer.game_id == game_id,
+                GamePlayer.status == "joined",
+            )
+            .order_by(GamePlayer.id)
+        )
+        if for_update:
+            query = query.with_for_update()
+        return list((await session.scalars(query)).all())
+
     async def join_lobby(
         self,
         session: AsyncSession,
@@ -110,35 +143,39 @@ class GameManager:
         user_telegram_id: int,
         display_name: str,
     ) -> GamePlayer:
-        game = await session.scalar(
-            select(GameSession)
-            .where(GameSession.id == game_id)
-            .with_for_update()
-        )
+        game = await self.get_game(session, game_id=game_id, for_update=True)
         if game is None:
             raise GameNotFoundError("game not found")
         if game.status != GameSessionStatus.LOBBY.value:
             raise GamePlayerError("lobby is closed")
 
         definition = self.registry.require(game.game_type)
-        players = list(
+        all_players = list(
             (
                 await session.scalars(
                     select(GamePlayer)
-                    .where(
-                        GamePlayer.game_id == game.id,
-                        GamePlayer.status == "joined",
-                    )
+                    .where(GamePlayer.game_id == game.id)
                     .order_by(GamePlayer.id)
                     .with_for_update()
                 )
             ).all()
         )
-        existing = next((p for p in players if p.user_telegram_id == user_telegram_id), None)
-        if existing is not None:
+        joined = [player for player in all_players if player.status == "joined"]
+        existing = next(
+            (player for player in all_players if player.user_telegram_id == user_telegram_id),
+            None,
+        )
+        if existing is not None and existing.status == "joined":
             return existing
-        if len(players) >= definition.max_players:
+        if len(joined) >= definition.max_players:
             raise GamePlayerError("lobby is full")
+        if existing is not None:
+            existing.status = "joined"
+            existing.display_name = display_name
+            existing.left_at = None
+            await session.commit()
+            await session.refresh(existing)
+            return existing
 
         player = GamePlayer(
             game_id=game.id,
@@ -158,7 +195,7 @@ class GameManager:
                     GamePlayer.user_telegram_id == user_telegram_id,
                 )
             )
-            if existing is not None:
+            if existing is not None and existing.status == "joined":
                 return existing
             raise GamePlayerError("failed to join lobby") from error
         await session.refresh(player)
@@ -171,11 +208,7 @@ class GameManager:
         game_id: int,
         user_telegram_id: int,
     ) -> None:
-        game = await session.scalar(
-            select(GameSession)
-            .where(GameSession.id == game_id)
-            .with_for_update()
-        )
+        game = await self.get_game(session, game_id=game_id, for_update=True)
         if game is None:
             raise GameNotFoundError("game not found")
         if game.status != GameSessionStatus.LOBBY.value:
@@ -195,13 +228,52 @@ class GameManager:
         if player is None:
             return
         player.status = "left"
+        player.left_at = datetime.now(timezone.utc)
         await session.commit()
 
+    async def start_lobby(self, session: AsyncSession, *, game_id: int) -> GameSession:
+        game = await self.get_game(session, game_id=game_id, for_update=True)
+        if game is None:
+            raise GameNotFoundError("game not found")
+        if game.status != GameSessionStatus.LOBBY.value:
+            raise GamePlayerError("lobby is closed")
+
+        definition = self.registry.require(game.game_type)
+        players = await self.list_players(session, game_id=game.id, for_update=True)
+        if len(players) < definition.min_players:
+            raise GamePlayerError("not enough players")
+
+        game.status = GameSessionStatus.RUNNING.value
+        game.phase = "starting"
+        game.phase_seq += 1
+        game.round_no = 0
+        game.started_at = datetime.now(timezone.utc)
+        game.deadline_at = None
+        await session.commit()
+        await session.refresh(game)
+        return game
+
+    async def cancel_game(
+        self,
+        session: AsyncSession,
+        *,
+        game_id: int,
+        reason: str = "cancelled",
+    ) -> GameSession:
+        game = await self.get_game(session, game_id=game_id, for_update=True)
+        if game is None:
+            raise GameNotFoundError("game not found")
+        if game.status in {GameSessionStatus.FINISHED.value, GameSessionStatus.CANCELLED.value}:
+            return game
+        game.status = GameSessionStatus.CANCELLED.value
+        game.phase = "cancelled"
+        game.phase_seq += 1
+        game.deadline_at = None
+        game.finished_at = datetime.now(timezone.utc)
+        game.finish_reason = reason[:64]
+        await session.commit()
+        await session.refresh(game)
+        return game
+
     async def player_count(self, session: AsyncSession, *, game_id: int) -> int:
-        players = await session.scalars(
-            select(GamePlayer.id).where(
-                GamePlayer.game_id == game_id,
-                GamePlayer.status == "joined",
-            )
-        )
-        return len(players.all())
+        return len(await self.list_players(session, game_id=game_id))
