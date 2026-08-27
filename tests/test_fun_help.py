@@ -1,59 +1,53 @@
 from app.handlers import fun_help
 
 
-def test_entertainment_help_has_short_entry_words_and_categories():
-    assert fun_help.OPEN_WORDS == {"развлечения", "игры"}
-    assert {"relations", "family", "fight", "absurd", "crime", "random"} <= set(fun_help.CATEGORIES)
+def test_entertainment_help_has_separate_entry_words() -> None:
+    assert fun_help.OPEN_WORDS == {"развлечения", "развлекательные команды"}
+    assert "игры" not in fun_help.OPEN_WORDS
 
 
-def test_entertainment_main_menu_has_owner_bound_sections_and_categories():
+def test_entertainment_main_menu_has_actions_family_and_close() -> None:
     owner_id = 123456789
     markup = fun_help._main_markup(owner_id)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert f"funhelp:{owner_id}:all:0" in callbacks
-    assert f"funhelp:{owner_id}:proposals" in callbacks
-    assert f"funhelp:{owner_id}:relations" in callbacks
-    assert f"funhelp:{owner_id}:family" in callbacks
-    assert f"funhelp:{owner_id}:fight" in callbacks
-    assert f"funhelp:{owner_id}:absurd" in callbacks
-    assert f"funhelp:{owner_id}:crime" in callbacks
-    assert f"funhelp:{owner_id}:random" in callbacks
-    assert f"funhelp:{owner_id}:suggest" in callbacks
-    assert f"funhelp:{owner_id}:close" in callbacks
-    assert all(str(owner_id) in callback for callback in callbacks if callback)
+    assert callbacks == [
+        f"funhelp:{owner_id}:all:0",
+        f"funhelp:{owner_id}:family",
+        f"funhelp:{owner_id}:close",
+    ]
 
 
-def test_entertainment_category_back_keeps_actions_proposals_and_home_separate():
+def test_entertainment_back_returns_to_entertainment_home() -> None:
     owner_id = 987654321
     markup = fun_help._back_markup(owner_id)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert f"funhelp:{owner_id}:all:0" in callbacks
-    assert f"funhelp:{owner_id}:proposals" in callbacks
     assert f"funhelp:{owner_id}:home" in callbacks
     assert f"funhelp:{owner_id}:close" in callbacks
 
 
-def test_entertainment_help_explains_actions_and_proposals_differently():
+def test_entertainment_help_explicitly_separates_real_games() -> None:
     text = fun_help._main_text().lower()
-    assert "все действия" in text
-    assert "срабатывают сразу" in text
-    assert "все предложения" in text
-    assert "принять или отклонить" in text
+    assert "развлекательные команды" in text
+    assert "это не игры" in text
+    assert "семья и отношения" in text
+    assert "/games" in text
 
 
-def test_all_actions_excludes_social_proposals():
+def test_plain_actions_exclude_family_proposals() -> None:
     actions = set(fun_help._all_actions())
-    proposals = set(fun_help._proposal_actions())
+    family = set(fun_help._family_actions())
     assert actions
-    assert proposals
-    assert actions.isdisjoint(proposals)
-    assert "пожениться" in proposals
     assert "пожениться" not in actions
+    assert "пожениться" in family
+    assert "выйти замуж" in family
+    assert "сделать предложение" in family
+    assert "подать на развод" in family
+    assert "мои отношения" in family
 
 
-def test_proposals_help_explains_confirmation_and_marriage_commands():
-    text = fun_help._proposals_text().lower()
-    assert "принять" in text
-    assert "отказать" in text
-    assert "брак или мой брак" in text
-    assert "развестись" in text
+def test_retired_pseudo_game_categories_are_absent() -> None:
+    source = open("app/handlers/fun_help.py", encoding="utf-8").read()
+    assert "CATEGORIES" not in source
+    assert "🎲 Рандом" not in source
+    assert "💰 Криминал" not in source
+    assert "Что попробовать?" not in source
