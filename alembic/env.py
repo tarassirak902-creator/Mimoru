@@ -14,6 +14,7 @@ import app.db.payment_refund_models  # noqa: F401
 from app.db import broadcast_models  # noqa: F401
 from app.db import deleted_cleanup_retry_models  # noqa: F401
 from app.db import fun_models  # noqa: F401
+from app.db import game_models  # noqa: F401
 from app.db import group_disconnect_models  # noqa: F401
 from app.db import invite_operation_models  # noqa: F401
 from app.db import models  # noqa: F401
