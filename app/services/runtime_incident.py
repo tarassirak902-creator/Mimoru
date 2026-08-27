@@ -4,13 +4,15 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
-from aiogram import Bot
+from aiogram import BaseMiddleware, Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import TelegramObject
 from redis.asyncio import Redis
 
 
@@ -35,7 +37,6 @@ class RuntimeTracker:
         self.run_id = uuid.uuid4().hex
         self.started_at = datetime.now(timezone.utc)
         self.processed_updates = 0
-        self._clean_shutdown = False
 
     async def inspect_previous_run(self) -> RuntimeIncident | None:
         raw = await self.redis.get(RUNTIME_STATE_KEY)
@@ -112,8 +113,23 @@ class RuntimeTracker:
         await self._write_state(clean_shutdown=False)
 
     async def mark_clean_shutdown(self) -> None:
-        self._clean_shutdown = True
         await self._write_state(clean_shutdown=True)
+
+
+class RuntimeUpdateCounterMiddleware(BaseMiddleware):
+    def __init__(self, tracker: RuntimeTracker) -> None:
+        self.tracker = tracker
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        try:
+            return await handler(event, data)
+        finally:
+            self.tracker.count_update()
 
 
 def _display_time(value: str | None) -> str:
