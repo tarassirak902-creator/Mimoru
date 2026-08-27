@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_startup_backlog_recovers_only_fresh_critical_group_commands() -> None:
     source = (ROOT / "app/services/startup_backlog.py").read_text(encoding="utf-8")
 
-    assert "CRITICAL_MODERATION_TTL_SECONDS = 300" in source
+    assert "CRITICAL_MODERATION_TTL_SECONDS = 600" in source
     assert '_CRITICAL_COMMANDS = {"бан", "мут", "пред"}' in source
     assert '_GROUP_TYPES = {"group", "supergroup"}' in source
     assert "update.message" in source
@@ -45,3 +45,10 @@ def test_startup_drain_runs_before_polling_and_notice_sender_is_background_task(
     assert "send_recovery_notices(bot, redis, stop_event)" in main
     assert 'name="recovery-notices"' in main
     assert "await stop_task(recovery_notice_task, timeout=10.0)" in main
+
+
+def test_bot_container_restarts_after_process_failure() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    bot_section = compose.split("  bot:\n", 1)[1].split("\n  postgres:\n", 1)[0]
+
+    assert "restart: unless-stopped" in bot_section
