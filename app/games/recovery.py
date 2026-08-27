@@ -6,7 +6,7 @@ import structlog
 from sqlalchemy import select
 
 from app.db.game_models import GameSession
-from app.db.session import session_factory
+from app.db.session import SessionFactory
 from app.games.enums import GameSessionStatus
 from app.games.registry import game_registry
 
@@ -15,7 +15,7 @@ log = structlog.get_logger()
 
 
 async def recover_active_games() -> None:
-    async with session_factory() as session:
+    async with SessionFactory() as session:
         ids = list(
             (
                 await session.scalars(
@@ -32,7 +32,7 @@ async def recover_active_games() -> None:
         )
 
     for game_id in ids:
-        async with session_factory() as session:
+        async with SessionFactory() as session:
             game = await session.scalar(
                 select(GameSession)
                 .where(GameSession.id == game_id)
@@ -66,7 +66,7 @@ async def recover_active_games() -> None:
 
 async def process_game_timeouts() -> None:
     now = datetime.now(timezone.utc)
-    async with session_factory() as session:
+    async with SessionFactory() as session:
         ids = list(
             (
                 await session.scalars(
@@ -83,7 +83,7 @@ async def process_game_timeouts() -> None:
         )
 
     for game_id in ids:
-        async with session_factory() as session:
+        async with SessionFactory() as session:
             game = await session.scalar(
                 select(GameSession)
                 .where(GameSession.id == game_id)
