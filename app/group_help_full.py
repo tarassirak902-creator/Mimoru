@@ -41,7 +41,8 @@ def _home_text() -> str:
         "🤖 Mimoru · Полная справка группы\n\n"
         "Здесь собраны фразы, которые можно написать прямо в группе.\n\n"
         "👤 Участникам — профиль, правила, жалобы, статистика и все разговорные варианты.\n"
-        "🎮 Игры — полный каталог развлечений открывается словом «игры».\n"
+        "🎭 Развлечения — reply-действия, семья и отношения.\n"
+        "🎮 Игры — отдельный раздел для полноценных игр; новые игры будут добавляться сюда.\n"
         "🛡 Админам — модерация, защита, управление, контент и сервисные команды.\n"
         "👑 Роли — кто что может.\n\n"
         "Выберите раздел."
@@ -55,13 +56,13 @@ def _members_text() -> str:
         "• кто я / мой профиль / моя стата — личная карточка\n"
         "• правила — правила группы\n"
         "• статистика — активность группы (расширенная статистика может требовать права)\n"
-        "• моя стата игр — личная игровая статистика\n"
-        "• топ игр — рейтинг игроков\n"
-        "• брак / мой брак — текущий партнёр\n"
-        "• развестись — завершить брак\n"
-        "• браки / драки / дуэли / свидания / признания / романтика — история игровых событий\n"
-        "• игры — интерактивный каталог всех игровых действий\n"
-        "• /imunitet — запретить или разрешить автоматические игровые действия Mimoru на вас\n\n"
+        "• развлечения — каталог развлекательных действий и отношений\n"
+        "• пожениться / выйти замуж / сделать предложение — предложение брака ответом на сообщение\n"
+        "• мой брак / мои отношения — текущий партнёр\n"
+        "• развестись / подать на развод — завершить брак\n"
+        "• браки — история браков группы\n"
+        "• /games — отдельный раздел полноценных игр\n"
+        "• моя стата игр / топ игр — игровая статистика; начнёт заполняться новыми играми\n\n"
         "🚨 Жалоба отправляется ответом на сообщение нарушителя. Нажмите «Все фразы участников», чтобы увидеть все варианты, которые понимает бот."
     )
 
@@ -209,10 +210,8 @@ def _admin_extra_text() -> str:
         "🧰 Дополнительные админ-функции\n\n"
         "жалобы — список жалоб\n"
         "закрыть жалобу 15 рассмотрено\n"
-        "настройки игр / авто игры — настройки автоматических игр (владелец)\n"
-        "авто игры вкл / выкл\n"
-        "авто игры 15-20 / 30-40 / 60\n"
-        "стата игр — общая статистика игр для администрации\n\n"
+        "стата игр — статистика полноценных игр; пока пустая до добавления новых игр\n\n"
+        "Старые авто-игры и их настройки удалены.\n\n"
         "Права конкретной команды зависят от ранга и настроек владельца."
     )
 
@@ -261,7 +260,10 @@ async def _open(message: Message, *, admin: bool = False) -> None:
     if message.from_user is None:
         return
     owner_id = message.from_user.id
-    await message.reply(_home_text() if not admin else "🛡 Mimoru · Полная справка администрации\n\nВыберите раздел.", reply_markup=_home_markup(owner_id) if not admin else _admin_markup(owner_id))
+    await message.reply(
+        _home_text() if not admin else "🛡 Mimoru · Полная справка администрации\n\nВыберите раздел.",
+        reply_markup=_home_markup(owner_id) if not admin else _admin_markup(owner_id),
+    )
 
 
 @router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold().in_(OPEN_WORDS))
@@ -302,13 +304,27 @@ async def navigate(callback: CallbackQuery) -> None:
         return
     page = (callback.data or "").rsplit(":", 1)[1]
     if page == "close":
-        await callback.message.delete(); await callback.answer(); return
+        await callback.message.delete()
+        await callback.answer()
+        return
     if page == "home":
-        await callback.message.edit_text(_home_text(), reply_markup=_home_markup(owner_id)); await callback.answer(); return
+        await callback.message.edit_text(_home_text(), reply_markup=_home_markup(owner_id))
+        await callback.answer()
+        return
     if page == "admin":
-        await callback.message.edit_text("🛡 Mimoru · Полная справка администрации\n\nВыберите раздел.", reply_markup=_admin_markup(owner_id)); await callback.answer(); return
+        await callback.message.edit_text("🛡 Mimoru · Полная справка администрации\n\nВыберите раздел.", reply_markup=_admin_markup(owner_id))
+        await callback.answer()
+        return
     if page == "games":
-        await callback.message.edit_text("🎮 Игры\n\nНапишите «игры» или «развлечения» — откроется отдельный интерактивный каталог со всеми игровыми действиями, предложениями, браками, дуэлями и подсказками.", reply_markup=_back(owner_id)); await callback.answer(); return
+        await callback.message.edit_text(
+            "🎮 Игры\n\n"
+            "Это отдельный раздел для полноценных игр. Старые псевдоигры и автоматические игровые действия удалены.\n\n"
+            "Для развлекательных reply-команд, брака и отношений напишите «развлечения».\n"
+            "Новые игры будут добавляться в /games отдельно.",
+            reply_markup=_back(owner_id),
+        )
+        await callback.answer()
+        return
     pages = {
         "members": (_members_text(), False),
         "member_aliases": (_member_alias_text(), False),
@@ -323,7 +339,8 @@ async def navigate(callback: CallbackQuery) -> None:
     }
     item = pages.get(page)
     if item is None:
-        await callback.answer("Раздел не найден.", show_alert=True); return
+        await callback.answer("Раздел не найден.", show_alert=True)
+        return
     text, admin = item
     await callback.message.edit_text(text, reply_markup=_back(owner_id, admin=admin))
     await callback.answer()
