@@ -1,32 +1,19 @@
 from __future__ import annotations
 
 
+# Persistent family/relationship proposals. These are entertainment features,
+# not games and must not feed future game statistics.
 PROPOSALS = {
     "пожениться": ("marry", "💍 {user1} сделал предложение {user2}. Что ответит {user2}?"),
-    "позвать на свидание": ("date", "🌹 {user1} позвал {user2} на свидание. Ответ за {user2}."),
-    "признаться в любви": ("love", "❤️ {user1} признался в любви {user2}. Кажется, весь чат замолчал в ожидании ответа."),
-    "предложить любовь": ("romance", "😏 {user1} предложил {user2} романтический вечер. Решение принимает только {user2}."),
-    "дуэль": ("duel", "⚔️ {user1} вызвал {user2} на дуэль. {user2}, принимаешь вызов?"),
-    "драка": ("fight", "🥊 {user1} вызвал {user2} на эпическую драку. {user2}, принимаешь?"),
-    "подраться": ("fight", "🥊 {user1} вызвал {user2} на эпическую драку. {user2}, принимаешь?"),
+    "выйти замуж": ("marry", "💍 {user1} сделал предложение {user2}. Что ответит {user2}?"),
+    "сделать предложение": ("marry", "💍 {user1} сделал предложение {user2}. Что ответит {user2}?"),
 }
 PROPOSAL_ACTIONS = frozenset(PROPOSALS)
 
 HISTORY_COMMANDS = {
     "браки": "marry",
-    "драки": "fight",
-    "дуэли": "duel",
-    "свидания": "date",
-    "признания": "love",
-    "романтика": "romance",
-    "романтические предложения": "romance",
 }
 HISTORY_WORDS = frozenset(HISTORY_COMMANDS)
 HISTORY_TITLES = {
     "marry": "💍 Браки группы",
-    "fight": "🥊 Драки группы",
-    "duel": "⚔️ Дуэли группы",
-    "date": "🌹 Свидания группы",
-    "love": "❤️ Признания в любви",
-    "romance": "😏 Романтические предложения",
 }

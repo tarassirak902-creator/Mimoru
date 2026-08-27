@@ -49,7 +49,6 @@ from app.services.runtime_incident import RuntimeTracker, RuntimeUpdateCounterMi
 from app.services.startup_backlog import drain_startup_backlog, send_recovery_notices
 from app.services.ui import clean_ui_text
 from app.tasks_ad_market import ad_market_background_loop
-from app.tasks_fun import fun_background_loop
 
 
 _PLAIN_TEXT_FIELDS = ("text", "caption", "title", "description", "explanation", "question")
@@ -158,7 +157,7 @@ async def configure_bot(bot: Bot) -> None:
         BotCommand(command="help", description="Помощь по боту Mimoru"),
     ])
     await bot.set_my_commands([
-        BotCommand(command="games", description="Развлечения"),
+        BotCommand(command="games", description="Игры"),
         BotCommand(command="report", description="Пожаловаться"),
         BotCommand(command="help", description="Помощь"),
         BotCommand(command="comands", description="Список команд"),
@@ -288,7 +287,6 @@ async def main() -> None:
     stop_event = asyncio.Event()
     task = None
     ad_market_task = None
-    fun_task = None
     recovery_notice_task = None
     heartbeat_task = None
     clean_shutdown = False
@@ -312,7 +310,6 @@ async def main() -> None:
         await health.start()
         task = asyncio.create_task(leader_background_loop(bot, redis, stop_event), name="background-loop")
         ad_market_task = asyncio.create_task(ad_market_background_loop(bot, stop_event), name="ad-market-background-loop")
-        fun_task = asyncio.create_task(fun_background_loop(bot, stop_event), name="fun-background-loop")
         recovery_notice_task = asyncio.create_task(
             send_recovery_notices(bot, redis, stop_event),
             name="recovery-notices",
@@ -336,7 +333,6 @@ async def main() -> None:
         await stop_task(recovery_notice_task, timeout=10.0)
         await stop_task(task, timeout=10.0)
         await stop_task(ad_market_task, timeout=10.0)
-        await stop_task(fun_task, timeout=10.0)
         await stop_task(heartbeat_task, timeout=10.0)
         if clean_shutdown:
             try:
