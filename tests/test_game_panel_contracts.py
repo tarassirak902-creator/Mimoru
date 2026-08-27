@@ -1,0 +1,40 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_games_command_is_owned_by_game_engine() -> None:
+    game_handlers = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
+    entertainment = (ROOT / "app/handlers/fun_preferences.py").read_text(encoding="utf-8")
+
+    assert '@router.message(Command("games")' in game_handlers
+    assert 'Command("games")' not in entertainment
+    assert "router.include_router(game_handlers.router)" in entertainment
+    assert entertainment.index("game_handlers.router") < entertainment.index("group_help_full.router")
+
+
+def test_game_router_does_not_capture_ordinary_group_text() -> None:
+    source = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
+    assert "F.text.casefold()" not in source
+    assert 'F.data == "gm:home"' in source
+    assert 'F.data == "gm:list"' in source
+    assert 'r"^gm:new:' in source
+
+
+def test_game_panel_is_edit_first_and_pin_is_best_effort() -> None:
+    source = (ROOT / "app/games/panels.py").read_text(encoding="utf-8")
+    ensure = source.split("async def ensure_game_panel(", 1)[1].split("async def render_profile(", 1)[0]
+
+    assert ensure.index("bot.edit_message_text(") < ensure.index("bot.send_message(")
+    assert "message is not modified" in ensure
+    assert "bot.pin_chat_message(" in ensure
+    assert "except (TelegramBadRequest, TelegramForbiddenError)" in ensure
+    assert "game_panel_pin_skipped" in ensure
+
+
+def test_game_panel_has_single_persistent_group_key() -> None:
+    models = (ROOT / "app/db/game_models.py").read_text(encoding="utf-8")
+    panel = models.split("class GamePanel", 1)[1].split("class GameSession", 1)[0]
+    assert 'ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True' in panel
+    assert "message_id" in panel
