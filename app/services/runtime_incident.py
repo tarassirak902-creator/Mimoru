@@ -26,7 +26,7 @@ RUNTIME_STATE_TTL_SECONDS = 7 * 24 * 60 * 60
 class RuntimeIncident:
     previous_run_id: str
     started_at: str | None
-    last_heartbeat_at: str | None
+    crashed_at: str | None
     processed_updates: int
     reason: str
 
@@ -51,8 +51,10 @@ class RuntimeTracker:
         previous_run_id = str(state.get("run_id") or "unknown")
         if previous_run_id == self.run_id:
             return None
-        fatal_raw = await self.redis.get(RUNTIME_FATAL_KEY)
+
+        crashed_at = state.get("heartbeat_at")
         reason = "Причина не была перехвачена процессом (возможен внешний kill/OOM/сбой контейнера)."
+        fatal_raw = await self.redis.get(RUNTIME_FATAL_KEY)
         if fatal_raw:
             try:
                 fatal = json.loads(fatal_raw)
@@ -60,10 +62,12 @@ class RuntimeTracker:
                 fatal = None
             if isinstance(fatal, dict) and fatal.get("run_id") == previous_run_id:
                 reason = str(fatal.get("reason") or reason)
+                crashed_at = fatal.get("at") or crashed_at
+
         return RuntimeIncident(
             previous_run_id=previous_run_id,
             started_at=state.get("started_at"),
-            last_heartbeat_at=state.get("heartbeat_at"),
+            crashed_at=crashed_at,
             processed_updates=int(state.get("processed_updates") or 0),
             reason=reason,
         )
@@ -153,7 +157,7 @@ def _incident_text(incident: RuntimeIncident, backlog: dict[str, int]) -> str:
     reason = incident.reason.replace("\n", " ").strip()
     return (
         "🚨 Mimoru — аварийный перезапуск\n\n"
-        f"› Последний heartbeat: {_display_time(incident.last_heartbeat_at)}\n"
+        f"› Бот упал: {_display_time(incident.crashed_at)}\n"
         f"› Бот снова поднялся: {restored_at}\n"
         f"› Причина: {reason}\n"
         f"› Обработано до падения: {incident.processed_updates} update(ов)\n"
