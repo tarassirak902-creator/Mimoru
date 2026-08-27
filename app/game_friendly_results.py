@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.fun_models import GameEvent, GroupMarriage
 from app.db.models import Group, User
+from app.game_contracts import PROPOSALS, PROPOSAL_ACTIONS
 from app.handlers.fun_commands import FUN_ACTIONS
-from app.handlers.fun_social import PROPOSALS, PROPOSAL_ACTIONS
 
 router = Router(name=__name__)
 GROUP_TYPES = {"group", "supergroup"}
@@ -109,8 +109,11 @@ async def _db_name(session: AsyncSession, user_id: int, fallback: str | None = N
     return "участник"
 
 
-async def _active_group(session: AsyncSession, chat_id: int) -> Group | None:
-    return await session.scalar(select(Group).where(Group.telegram_chat_id == chat_id, Group.is_active.is_(True)))
+async def _active_group(session: AsyncSession, chat_id: int, *, for_update: bool = False) -> Group | None:
+    query = select(Group).where(Group.telegram_chat_id == chat_id, Group.is_active.is_(True))
+    if for_update:
+        query = query.with_for_update()
+    return await session.scalar(query)
 
 
 def _proposal_markup(kind: str, group_id: int, actor_id: int, target_id: int) -> InlineKeyboardMarkup:
@@ -154,11 +157,11 @@ async def friendly_proposal(message: Message, session: AsyncSession) -> None:
     if target.is_bot:
         await message.reply("🤖 Боты пока не принимают такие предложения.")
         return
-    group = await _active_group(session, message.chat.id)
-    if group is None:
-        return
     action = " ".join((message.text or "").casefold().strip().split())
     kind = PROPOSALS[action][0]
+    group = await _active_group(session, message.chat.id, for_update=kind == "marry")
+    if group is None:
+        return
     if kind == "marry":
         occupied = await session.scalar(select(GroupMarriage.id).where(GroupMarriage.group_id == group.id, GroupMarriage.active.is_(True), or_(GroupMarriage.user1_telegram_id.in_((actor.id, target.id)), GroupMarriage.user2_telegram_id.in_((actor.id, target.id)))).limit(1))
         if occupied is not None:
@@ -179,16 +182,18 @@ async def friendly_answer(callback: CallbackQuery, session: AsyncSession) -> Non
     if callback.from_user.id != target_id:
         await callback.answer(FOREIGN_BUTTON_NOTICE, show_alert=True)
         return
-    group = await session.scalar(select(Group).where(Group.id == group_id, Group.is_active.is_(True)))
+    group = await session.scalar(select(Group).where(Group.id == group_id, Group.is_active.is_(True)).with_for_update())
     if group is None or callback.message is None or callback.message.chat.id != group.telegram_chat_id:
         await callback.answer("Эта игра уже недоступна.", show_alert=True)
         return
-    event = await session.scalar(select(GameEvent).where(GameEvent.group_id == group_id, GameEvent.event_type == "proposal", GameEvent.action == kind, GameEvent.actor_telegram_id == actor_id, GameEvent.target_telegram_id == target_id, GameEvent.outcome == "pending").order_by(GameEvent.id.desc()).limit(1))
-    actor_name = await _db_name(session, actor_id, event.actor_name if event else None)
-    target_name = await _db_name(session, target_id, event.target_name if event else _tg_name(callback.from_user))
+    event = await session.scalar(select(GameEvent).where(GameEvent.group_id == group_id, GameEvent.event_type == "proposal", GameEvent.action == kind, GameEvent.actor_telegram_id == actor_id, GameEvent.target_telegram_id == target_id, GameEvent.outcome == "pending").order_by(GameEvent.id.desc()).limit(1).with_for_update())
+    if event is None:
+        await callback.answer("На это предложение уже ответили.", show_alert=True)
+        return
+    actor_name = await _db_name(session, actor_id, event.actor_name)
+    target_name = await _db_name(session, target_id, event.target_name or _tg_name(callback.from_user))
     mentions = {"actor": (actor_name, actor_id), "target": (target_name, target_id)}
-    if event is not None:
-        event.outcome = "accepted" if decision == "yes" else "rejected"
+    event.outcome = "accepted" if decision == "yes" else "rejected"
     if decision == "no":
         await session.commit()
         rejects = ("❌ {target} отказал {actor}. Без обид — игра продолжается 😄", "🙅 {target} сказал «не сегодня», {actor}. Бывает!", "😅 {actor}, {target} отклонил предложение. Следующая попытка будет легендарной.")
@@ -197,6 +202,12 @@ async def friendly_answer(callback: CallbackQuery, session: AsyncSession) -> Non
         await callback.answer("Отказано")
         return
     if kind == "marry":
+        occupied = await session.scalar(select(GroupMarriage.id).where(GroupMarriage.group_id == group.id, GroupMarriage.active.is_(True), or_(GroupMarriage.user1_telegram_id.in_((actor_id, target_id)), GroupMarriage.user2_telegram_id.in_((actor_id, target_id)))).limit(1))
+        if occupied is not None:
+            event.outcome = "cancelled"
+            await session.commit()
+            await callback.answer("Кто-то из участников уже состоит в браке.", show_alert=True)
+            return
         first, second = sorted((actor_id, target_id))
         existing = await session.scalar(select(GroupMarriage).where(GroupMarriage.group_id == group.id, GroupMarriage.user1_telegram_id == first, GroupMarriage.user2_telegram_id == second))
         if existing is None:
@@ -224,10 +235,10 @@ async def friendly_answer(callback: CallbackQuery, session: AsyncSession) -> Non
 async def friendly_divorce(message: Message, session: AsyncSession) -> None:
     if message.from_user is None:
         return
-    group = await _active_group(session, message.chat.id)
+    group = await _active_group(session, message.chat.id, for_update=True)
     if group is None:
         return
-    marriage = await session.scalar(select(GroupMarriage).where(GroupMarriage.group_id == group.id, GroupMarriage.active.is_(True), or_(GroupMarriage.user1_telegram_id == message.from_user.id, GroupMarriage.user2_telegram_id == message.from_user.id)))
+    marriage = await session.scalar(select(GroupMarriage).where(GroupMarriage.group_id == group.id, GroupMarriage.active.is_(True), or_(GroupMarriage.user1_telegram_id == message.from_user.id, GroupMarriage.user2_telegram_id == message.from_user.id)).with_for_update())
     if marriage is None:
         await message.reply("💍 В этой группе ты сейчас не в браке.")
         return
