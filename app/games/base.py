@@ -13,7 +13,7 @@ class BaseGame(ABC):
 
     @abstractmethod
     async def start(self, session: AsyncSession, game: GameSession) -> None:
-        pass
+        return None
 
     @abstractmethod
     async def handle_action(
@@ -25,12 +25,12 @@ class BaseGame(ABC):
         action: str,
         value: int | str | None = None,
     ) -> None:
-        pass
+        return None
 
     @abstractmethod
     async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
-        pass
+        return None
 
     @abstractmethod
     async def restore(self, session: AsyncSession, game: GameSession) -> None:
-        pass
+        return None
