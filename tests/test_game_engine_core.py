@@ -79,9 +79,9 @@ def test_game_schema_enforces_one_active_game_per_group() -> None:
 
 def test_game_manager_serializes_full_lobby_lifecycle() -> None:
     source = (ROOT / "app/games/manager.py").read_text(encoding="utf-8")
-    create = source.split("async def create_lobby(", 1)[1].split("async def join_lobby(", 1)[0]
+    create = source.split("async def create_lobby(", 1)[1].split("async def list_players(", 1)[0]
     join = source.split("async def join_lobby(", 1)[1].split("async def leave_lobby(", 1)[0]
-    leave = source.split("async def leave_lobby(", 1)[1].split("async def get_players(", 1)[0]
+    leave = source.split("async def leave_lobby(", 1)[1].split("async def start_lobby(", 1)[0]
     start = source.split("async def start_lobby(", 1)[1].split("async def cancel_game(", 1)[0]
     cancel = source.split("async def cancel_game(", 1)[1].split("async def player_count(", 1)[0]
 
@@ -89,19 +89,22 @@ def test_game_manager_serializes_full_lobby_lifecycle() -> None:
     assert "get_active_game(session, group_id=group.id, for_update=True)" in create
     assert "except IntegrityError" in create
 
+    assert "get_game(session, game_id=game_id, for_update=True)" in join
     assert ".with_for_update()" in join
     assert "definition.max_players" in join
     assert "existing.status = \"joined\"" in join
     assert "except IntegrityError" in join
 
+    assert "get_game(session, game_id=game_id, for_update=True)" in leave
     assert ".with_for_update()" in leave
     assert "lobby creator cannot leave" in leave
 
-    assert ".with_for_update()" in start
+    assert "get_game(session, game_id=game_id, for_update=True)" in start
+    assert "list_players(session, game_id=game.id, for_update=True)" in start
     assert "definition.min_players" in start
     assert "GameSessionStatus.RUNNING.value" in start
 
-    assert ".with_for_update()" in cancel
+    assert "get_game(session, game_id=game_id, for_update=True)" in cancel
     assert "GameSessionStatus.CANCELLED.value" in cancel
     assert "finished_at" in cancel
 
