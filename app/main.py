@@ -45,6 +45,7 @@ from app.services.moderation_operations import recover_moderation_operation_inte
 from app.services.public_identity import replace_public_group_id_labels
 from app.services.rank_provisioning import recover_rank_provisioning_intents
 from app.services.runtime import stop_task
+from app.services.runtime_incident import RuntimeTracker, RuntimeUpdateCounterMiddleware, notify_runtime_incident
 from app.services.startup_backlog import drain_startup_backlog, send_recovery_notices
 from app.services.ui import clean_ui_text
 from app.tasks_ad_market import ad_market_background_loop
@@ -172,8 +173,10 @@ async def main() -> None:
     settings = get_settings()
     bot = PlainTextBot(settings.bot_token)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    runtime_tracker = RuntimeTracker(redis)
     health = HealthServer(redis, settings.health_host, settings.health_port)
     dp = Dispatcher(redis=redis)
+    runtime_counter_middleware = RuntimeUpdateCounterMiddleware(runtime_tracker)
     slow_update_middleware = SlowUpdateLoggingMiddleware()
     cancelled_reply_middleware = CancelledReplyMiddleware(redis)
     db_middleware = DatabaseMiddleware()
@@ -181,6 +184,7 @@ async def main() -> None:
     group_mutation_lock_middleware = GroupMutationLockMiddleware()
     sensitive_alias_access_middleware = SensitiveGroupAliasAccessMiddleware()
     rank_mutation_lock_middleware = RankMutationLockMiddleware()
+    dp.update.outer_middleware(runtime_counter_middleware)
     dp.update.outer_middleware(slow_update_middleware)
     dp.message.outer_middleware(cancelled_reply_middleware)
     dp.message.outer_middleware(db_middleware)
@@ -286,7 +290,15 @@ async def main() -> None:
     ad_market_task = None
     fun_task = None
     recovery_notice_task = None
+    heartbeat_task = None
+    clean_shutdown = False
     try:
+        incident = await runtime_tracker.inspect_previous_run()
+        await runtime_tracker.mark_started()
+        heartbeat_task = asyncio.create_task(
+            runtime_tracker.heartbeat_loop(stop_event),
+            name="runtime-heartbeat",
+        )
         await ensure_ad_market_schema()
         await ensure_moderation_operation_schema()
         await recover_rank_provisioning_intents(bot)
@@ -295,7 +307,8 @@ async def main() -> None:
         await recover_invite_operations()
         await recover_moderation_operation_intents(bot)
         await configure_bot(bot)
-        await drain_startup_backlog(bot, dp, redis, allowed_updates=allowed_updates)
+        backlog_stats = await drain_startup_backlog(bot, dp, redis, allowed_updates=allowed_updates)
+        await notify_runtime_incident(bot, settings.service_owner_ids, incident, backlog_stats)
         await health.start()
         task = asyncio.create_task(leader_background_loop(bot, redis, stop_event), name="background-loop")
         ad_market_task = asyncio.create_task(ad_market_background_loop(bot, stop_event), name="ad-market-background-loop")
@@ -308,12 +321,28 @@ async def main() -> None:
         health.set_ready(True)
         log.info("bot_started", bot_id=me.id, username=me.username)
         await dp.start_polling(bot, allowed_updates=allowed_updates)
+        clean_shutdown = True
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        clean_shutdown = True
+        raise
+    except BaseException as exc:
+        try:
+            await runtime_tracker.record_fatal(exc)
+        except Exception:
+            log.exception("runtime_fatal_record_failed")
+        raise
     finally:
         stop_event.set()
         await stop_task(recovery_notice_task, timeout=10.0)
         await stop_task(task, timeout=10.0)
         await stop_task(ad_market_task, timeout=10.0)
         await stop_task(fun_task, timeout=10.0)
+        await stop_task(heartbeat_task, timeout=10.0)
+        if clean_shutdown:
+            try:
+                await runtime_tracker.mark_clean_shutdown()
+            except Exception:
+                log.exception("runtime_clean_shutdown_record_failed")
         await health.close()
         await redis.aclose()
         await bot.session.close()
