@@ -6,8 +6,8 @@ import random
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.game_contracts import PROPOSALS
 from app.handlers.fun_commands import ACTIONS
-from app.handlers.fun_social import PROPOSALS
 
 
 router = Router(name=__name__)
