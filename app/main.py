@@ -53,12 +53,21 @@ from app.tasks_ad_market import ad_market_background_loop
 
 _PLAIN_TEXT_FIELDS = ("text", "caption", "title", "description", "explanation", "question")
 _RETIRED_KICK_CALLBACK_PREFIXES = ("reason_action:", "member_punish:", "role_perm:")
-_IDEMPOTENT_EDIT_METHODS = {"EditMessageText", "EditMessageCaption", "EditMessageMedia", "EditMessageReplyMarkup"}
+_IDEMPOTENT_EDIT_METHODS = {
+    "EditMessageText",
+    "EditMessageCaption",
+    "EditMessageMedia",
+    "EditMessageReplyMarkup",
+}
 
 
 def _is_retired_kick_button(button: Any) -> bool:
     callback_data = getattr(button, "callback_data", None)
-    return bool(isinstance(callback_data, str) and callback_data.endswith(":kick") and callback_data.startswith(_RETIRED_KICK_CALLBACK_PREFIXES))
+    return bool(
+        isinstance(callback_data, str)
+        and callback_data.endswith(":kick")
+        and callback_data.startswith(_RETIRED_KICK_CALLBACK_PREFIXES)
+    )
 
 
 def _plain_reply_markup(markup: Any) -> Any:
@@ -67,7 +76,13 @@ def _plain_reply_markup(markup: Any) -> Any:
     if hasattr(markup, "inline_keyboard"):
         rows = []
         for row in markup.inline_keyboard:
-            cleaned_row = [button.model_copy(update={"text": clean_ui_text(button.text)}) if isinstance(getattr(button, "text", None), str) else button for button in row if not _is_retired_kick_button(button)]
+            cleaned_row = [
+                button.model_copy(update={"text": clean_ui_text(button.text)})
+                if isinstance(getattr(button, "text", None), str)
+                else button
+                for button in row
+                if not _is_retired_kick_button(button)
+            ]
             if cleaned_row:
                 rows.append(cleaned_row)
         return markup.model_copy(update={"inline_keyboard": rows})
@@ -94,12 +109,16 @@ def _plain_method(method: TelegramMethod[Any]) -> TelegramMethod[Any]:
 
 
 def _is_idempotent_edit_error(method: TelegramMethod[Any], exc: TelegramBadRequest) -> bool:
-    return type(method).__name__ in _IDEMPOTENT_EDIT_METHODS and "message is not modified" in str(exc).casefold()
+    return (
+        type(method).__name__ in _IDEMPOTENT_EDIT_METHODS
+        and "message is not modified" in str(exc).casefold()
+    )
 
 
 class PlainTextBot(Bot):
     async def __call__(self, method: TelegramMethod[Any], request_timeout: int | None = None) -> Any:
-        plain_method = await replace_public_group_id_labels(self, _plain_method(method))
+        plain_method = _plain_method(method)
+        plain_method = await replace_public_group_id_labels(self, plain_method)
         try:
             result = await super().__call__(plain_method, request_timeout=request_timeout)
         except TelegramBadRequest as exc:
@@ -112,7 +131,9 @@ class PlainTextBot(Bot):
     async def send_message(self, *args, **kwargs):
         text = kwargs.get("text")
         if text is None and len(args) >= 2 and isinstance(args[1], str):
-            mutable = list(args); mutable[1] = clean_ui_text(args[1]); args = tuple(mutable)
+            mutable = list(args)
+            mutable[1] = clean_ui_text(args[1])
+            args = tuple(mutable)
         elif isinstance(text, str):
             kwargs["text"] = clean_ui_text(text)
         kwargs.pop("parse_mode", None)
@@ -121,7 +142,9 @@ class PlainTextBot(Bot):
     async def edit_message_text(self, *args, **kwargs):
         text = kwargs.get("text")
         if text is None and args and isinstance(args[0], str):
-            mutable = list(args); mutable[0] = clean_ui_text(args[0]); args = tuple(mutable)
+            mutable = list(args)
+            mutable[0] = clean_ui_text(args[0])
+            args = tuple(mutable)
         elif isinstance(text, str):
             kwargs["text"] = clean_ui_text(text)
         kwargs.pop("parse_mode", None)
@@ -129,7 +152,10 @@ class PlainTextBot(Bot):
 
 
 async def configure_bot(bot: Bot) -> None:
-    await bot.set_my_commands([BotCommand(command="start", description="Открыть главное меню"), BotCommand(command="help", description="Помощь по боту Mimoru")])
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Открыть главное меню"),
+        BotCommand(command="help", description="Помощь по боту Mimoru"),
+    ])
     await bot.set_my_commands([
         BotCommand(command="games", description="Игры"),
         BotCommand(command="report", description="Пожаловаться"),
@@ -175,34 +201,102 @@ async def main() -> None:
     telegram_roles.router.callback_query.middleware(rank_mutation_lock_middleware)
     telegram_roles.router.message.middleware(rank_mutation_lock_middleware)
     dp.include_routers(
-        fun_preferences.router, fun_extras.router, group_onboarding_flow.router, mimoru_identity.router,
-        member_profile_v2.router, group_stats_v2.router, deferred_bans.router, rank_provisioning_handlers.router,
-        rank_text_commands.router, group_action_aliases.router, group_shortcuts.router, common.router,
-        group_lookup.router, member_navigation.router, service_owner_directory.router, contextual_back.router,
-        group_directory.router, plan_directory.router, ad_invoice_safety.router, ad_market_atomic.router,
-        ad_market_v3.router, ad_navigation.router, home_panel.router, plan_catalog.router, promo_redemption.router,
-        plan_legacy_redirect.router, navigation.router, wizard_navigation.router, setup_legacy_redirect.router,
-        navigation_fixes.router, input_safety.router, automation.router, operations_center.router,
-        ad_legacy_payment_guard.router, billing.router, kick_retirement.router, moderation_command_modes.router,
-        moderation_durable_guard.router, reason_admin.router, group_commands.router, fun_help.router,
-        fun_bot_guard.router, fun_stats.router, fun_social.router, fun_commands.router, rank_legacy_guard.router,
-        rank_policy_fix.router, admin_access_mode.router, telegram_roles.router, control_center.router,
-        onboarding.router, deleted_accounts.router, member_center.router, panel.router,
-        service_management_fixes.router, service_group_access.router, service_management.router,
-        service_admin.router, dashboard.router, required_direct.router, group.router, audit.router,
-        hardening.router, safety.router, quarantine.router, slow_mode.router, campaign_spam.router,
-        edit_protection.router, invite_operation_guard.router, join_review_guard.router, join_requests.router,
-        mentions.router, sender_chats.router, members.router, operations.router, permission_modes.router,
-        advanced.router, features.router, service_broadcast.router, client_management.router, protection.router,
+        fun_preferences.router,
+        fun_extras.router,
+        group_onboarding_flow.router,
+        mimoru_identity.router,
+        member_profile_v2.router,
+        group_stats_v2.router,
+        deferred_bans.router,
+        rank_provisioning_handlers.router,
+        rank_text_commands.router,
+        group_action_aliases.router,
+        group_shortcuts.router,
+        common.router,
+        group_lookup.router,
+        member_navigation.router,
+        service_owner_directory.router,
+        contextual_back.router,
+        group_directory.router,
+        plan_directory.router,
+        ad_invoice_safety.router,
+        ad_market_atomic.router,
+        ad_market_v3.router,
+        ad_navigation.router,
+        home_panel.router,
+        plan_catalog.router,
+        promo_redemption.router,
+        plan_legacy_redirect.router,
+        navigation.router,
+        wizard_navigation.router,
+        setup_legacy_redirect.router,
+        navigation_fixes.router,
+        input_safety.router,
+        automation.router,
+        operations_center.router,
+        ad_legacy_payment_guard.router,
+        billing.router,
+        kick_retirement.router,
+        moderation_command_modes.router,
+        moderation_durable_guard.router,
+        reason_admin.router,
+        group_commands.router,
+        fun_help.router,
+        fun_bot_guard.router,
+        fun_stats.router,
+        fun_social.router,
+        fun_commands.router,
+        rank_legacy_guard.router,
+        rank_policy_fix.router,
+        admin_access_mode.router,
+        telegram_roles.router,
+        control_center.router,
+        onboarding.router,
+        deleted_accounts.router,
+        member_center.router,
+        panel.router,
+        service_management_fixes.router,
+        service_group_access.router,
+        service_management.router,
+        service_admin.router,
+        dashboard.router,
+        required_direct.router,
+        group.router,
+        audit.router,
+        hardening.router,
+        safety.router,
+        quarantine.router,
+        slow_mode.router,
+        campaign_spam.router,
+        edit_protection.router,
+        invite_operation_guard.router,
+        join_review_guard.router,
+        join_requests.router,
+        mentions.router,
+        sender_chats.router,
+        members.router,
+        operations.router,
+        permission_modes.router,
+        advanced.router,
+        features.router,
+        service_broadcast.router,
+        client_management.router,
+        protection.router,
     )
     allowed_updates = dp.resolve_used_update_types()
     stop_event = asyncio.Event()
-    task = ad_market_task = recovery_notice_task = heartbeat_task = None
+    task = None
+    ad_market_task = None
+    recovery_notice_task = None
+    heartbeat_task = None
     clean_shutdown = False
     try:
         incident = await runtime_tracker.inspect_previous_run()
         await runtime_tracker.mark_started()
-        heartbeat_task = asyncio.create_task(runtime_tracker.heartbeat_loop(stop_event), name="runtime-heartbeat")
+        heartbeat_task = asyncio.create_task(
+            runtime_tracker.heartbeat_loop(stop_event),
+            name="runtime-heartbeat",
+        )
         await ensure_ad_market_schema()
         await ensure_moderation_operation_schema()
         await recover_rank_provisioning_intents(bot)
@@ -216,7 +310,10 @@ async def main() -> None:
         await health.start()
         task = asyncio.create_task(leader_background_loop(bot, redis, stop_event), name="background-loop")
         ad_market_task = asyncio.create_task(ad_market_background_loop(bot, stop_event), name="ad-market-background-loop")
-        recovery_notice_task = asyncio.create_task(send_recovery_notices(bot, redis, stop_event), name="recovery-notices")
+        recovery_notice_task = asyncio.create_task(
+            send_recovery_notices(bot, redis, stop_event),
+            name="recovery-notices",
+        )
         me = await bot.get_me()
         health.set_ready(True)
         log.info("bot_started", bot_id=me.id, username=me.username)
