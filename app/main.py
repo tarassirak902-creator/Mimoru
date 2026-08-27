@@ -44,10 +44,11 @@ from app.services.moderation_operation_schema import ensure_moderation_operation
 from app.services.moderation_operations import recover_moderation_operation_intents
 from app.services.public_identity import replace_public_group_id_labels
 from app.services.rank_provisioning import recover_rank_provisioning_intents
+from app.services.runtime import stop_task
+from app.services.startup_backlog import drain_startup_backlog, send_recovery_notices
 from app.services.ui import clean_ui_text
 from app.tasks_ad_market import ad_market_background_loop
 from app.tasks_fun import fun_background_loop
-from app.services.runtime import stop_task
 
 
 _PLAIN_TEXT_FIELDS = ("text", "caption", "title", "description", "explanation", "question")
@@ -279,10 +280,12 @@ async def main() -> None:
         client_management.router,
         protection.router,
     )
+    allowed_updates = dp.resolve_used_update_types()
     stop_event = asyncio.Event()
     task = None
     ad_market_task = None
     fun_task = None
+    recovery_notice_task = None
     try:
         await ensure_ad_market_schema()
         await ensure_moderation_operation_schema()
@@ -292,16 +295,22 @@ async def main() -> None:
         await recover_invite_operations()
         await recover_moderation_operation_intents(bot)
         await configure_bot(bot)
+        await drain_startup_backlog(bot, dp, redis, allowed_updates=allowed_updates)
         await health.start()
         task = asyncio.create_task(leader_background_loop(bot, redis, stop_event), name="background-loop")
         ad_market_task = asyncio.create_task(ad_market_background_loop(bot, stop_event), name="ad-market-background-loop")
         fun_task = asyncio.create_task(fun_background_loop(bot, stop_event), name="fun-background-loop")
+        recovery_notice_task = asyncio.create_task(
+            send_recovery_notices(bot, redis, stop_event),
+            name="recovery-notices",
+        )
         me = await bot.get_me()
         health.set_ready(True)
         log.info("bot_started", bot_id=me.id, username=me.username)
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await dp.start_polling(bot, allowed_updates=allowed_updates)
     finally:
         stop_event.set()
+        await stop_task(recovery_notice_task, timeout=10.0)
         await stop_task(task, timeout=10.0)
         await stop_task(ad_market_task, timeout=10.0)
         await stop_task(fun_task, timeout=10.0)
