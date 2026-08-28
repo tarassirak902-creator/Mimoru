@@ -70,8 +70,10 @@ def test_help_keeps_core_admin_workflows_visible() -> None:
 
 def test_games_slash_command_is_reserved_for_real_games() -> None:
     preferences = _source("app/handlers/fun_preferences.py")
+    game_handlers = _source("app/games/handlers.py")
     help_source = _source("app/handlers/fun_help.py")
-    assert 'Command("games")' in preferences
-    assert "Раздел подготовлен для новых полноценных игр" in preferences
-    assert "fun_help.entertainment_help(message)" not in preferences
+    assert 'Command("games")' in game_handlers
+    assert 'Command("games")' not in preferences
+    assert "router.include_router(game_handlers.router)" in preferences
+    assert "fun_help.entertainment_help(message)" not in game_handlers
     assert 'OPEN_WORDS = {"развлечения", "развлекательные команды"}' in help_source

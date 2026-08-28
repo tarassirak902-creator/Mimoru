@@ -19,6 +19,7 @@ import app.db.payment_refund_models  # noqa: F401
 import app.db.broadcast_models  # noqa: F401  # registers broadcast delivery ORM models
 import app.db.deleted_cleanup_retry_models  # noqa: F401  # registers cleanup retry ORM model
 import app.db.fun_models  # noqa: F401  # registers entertainment ORM models
+import app.db.game_models  # noqa: F401  # registers durable game engine ORM models
 import app.db.group_disconnect_models  # noqa: F401  # registers group disconnect ORM model
 import app.db.invite_operation_models  # noqa: F401  # registers invite operation ORM models
 import app.db.models  # noqa: F401  # registers core ORM models

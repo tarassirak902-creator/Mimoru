@@ -54,7 +54,10 @@ def test_marriage_is_group_scoped_and_persistent():
 
 def test_games_and_entertainment_have_separate_entrypoints():
     preferences = (ROOT / "app/handlers/fun_preferences.py").read_text(encoding="utf-8")
+    game_handlers = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
     help_module = (ROOT / "app/handlers/fun_help.py").read_text(encoding="utf-8")
-    assert 'Command("games")' in preferences
+    assert 'Command("games")' in game_handlers
+    assert 'Command("games")' not in preferences
+    assert "router.include_router(game_handlers.router)" in preferences
     assert 'OPEN_WORDS = {"развлечения", "развлекательные команды"}' in help_module
     assert "Для настоящих игр используйте /games" in help_module
