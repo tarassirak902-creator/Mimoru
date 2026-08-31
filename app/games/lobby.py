@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from aiogram import Bot
@@ -52,9 +52,10 @@ async def lobby_text(
     lines.extend([
         "",
         f"Минимум для старта: {definition.min_players}",
+        "⏱ Лобби автоматически закроется через 10 минут без старта." if game.game_type == "mafia" else "",
         "Обычная переписка группы не влияет на игру.",
     ])
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line != "")
 
 
 async def ensure_lobby_message(
@@ -65,6 +66,9 @@ async def ensure_lobby_message(
     game: GameSession,
     manager: GameManager,
 ) -> int | None:
+    if game.game_type == "mafia" and game.deadline_at is None:
+        game.deadline_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        await session.commit()
     text = await lobby_text(session, game=game, manager=manager)
     markup = lobby_markup(game.id, game.game_type)
 
