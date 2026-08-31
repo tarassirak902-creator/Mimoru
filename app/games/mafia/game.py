@@ -7,9 +7,11 @@ import random
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GamePlayer, GameSession
+from app.db.game_models import GameAction, GamePlayer, GameSession
 from app.games.base import BaseGame
 from app.games.config import GameDefinition
+from app.games.enums import GameSessionStatus
+from app.games.mafia.resolution import finish_game, resolve_day_vote, resolve_night, winner
 
 
 class MafiaPhase(StrEnum):
@@ -52,8 +54,7 @@ class MafiaGame(BaseGame):
     def _role_deck(count: int) -> list[str]:
         mafia_count = max(1, count // 4)
         roles = ["mafia"] * mafia_count
-        if count >= 4:
-            roles.append("doctor")
+        roles.append("doctor")
         if count >= 5:
             roles.append("commissioner")
         roles.extend(["civilian"] * (count - len(roles)))
@@ -72,7 +73,7 @@ class MafiaGame(BaseGame):
             player.role = role
             player.team = "mafia" if role == "mafia" else "town"
             player.status = "alive"
-            player.state_json = {"role_revealed": False}
+            player.state_json = {"role_revealed": False, "result_applied": False}
         game.phase = MafiaPhase.DAY_START.value
         game.phase_seq += 1
         game.round_no = 1
@@ -81,6 +82,8 @@ class MafiaGame(BaseGame):
             "doctor_can_self_heal": True,
             "doctor_can_heal_same_player_twice": False,
             "last_healed_user_id": None,
+            "last_day_result": None,
+            "last_night_result": None,
         }
         game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=15)
         await session.commit()
@@ -94,40 +97,49 @@ class MafiaGame(BaseGame):
         action: str,
         value: int | str | None = None,
     ) -> None:
-        # Concrete voting/night actions are added in the next slice. Keeping this
-        # strict prevents accidental text-driven gameplay or unsupported actions.
         raise ValueError(f"unsupported mafia action: {action}")
 
-    async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
+    async def _advance_phase(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
-        if game is None or game.status != "running":
+        if game is None or game.status != GameSessionStatus.RUNNING.value:
             return
         now = datetime.now(timezone.utc)
-        if game.phase == MafiaPhase.DAY_START.value:
+        current = game.phase
+        if current == MafiaPhase.DAY_START.value:
             game.phase = MafiaPhase.DISCUSSION.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=90)
-        elif game.phase == MafiaPhase.DISCUSSION.value:
+        elif current == MafiaPhase.DISCUSSION.value:
             game.phase = MafiaPhase.DAY_VOTING.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=60)
-        elif game.phase == MafiaPhase.DAY_VOTING.value:
+        elif current == MafiaPhase.DAY_VOTING.value:
+            await resolve_day_vote(session, game)
+            winning_team = await winner(session, game.id)
+            if winning_team is not None:
+                await finish_game(session, game, winning_team)
+                return
             game.phase = MafiaPhase.VOTING_RESULT.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=10)
-        elif game.phase == MafiaPhase.VOTING_RESULT.value:
+        elif current == MafiaPhase.VOTING_RESULT.value:
             game.phase = MafiaPhase.NIGHT_START.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=10)
-        elif game.phase == MafiaPhase.NIGHT_START.value:
+        elif current == MafiaPhase.NIGHT_START.value:
             game.phase = MafiaPhase.NIGHT_ACTIONS.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=60)
-        elif game.phase == MafiaPhase.NIGHT_ACTIONS.value:
+        elif current == MafiaPhase.NIGHT_ACTIONS.value:
+            await resolve_night(session, game)
+            winning_team = await winner(session, game.id)
+            if winning_team is not None:
+                await finish_game(session, game, winning_team)
+                return
             game.phase = MafiaPhase.NIGHT_RESULT.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=10)
-        elif game.phase == MafiaPhase.NIGHT_RESULT.value:
+        elif current == MafiaPhase.NIGHT_RESULT.value:
             game.round_no += 1
             state = dict(game.state_json or {})
             state["day"] = int(state.get("day", 1)) + 1
@@ -137,14 +149,56 @@ class MafiaGame(BaseGame):
             game.deadline_at = now + timedelta(seconds=15)
         await session.commit()
 
-    async def restore(self, session: AsyncSession, game: GameSession) -> None:
-        # State is durable. Recovery only repairs a missing deadline so the
-        # scheduler can resume the state machine after a process restart.
+    async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
+        await self._advance_phase(session, game)
+
+    async def maybe_advance_if_ready(self, session: AsyncSession, game: GameSession) -> bool:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
-        if game is None or game.status != "running":
+        if game is None or game.status != GameSessionStatus.RUNNING.value:
+            return False
+        alive = list((await session.scalars(
+            select(GamePlayer).where(GamePlayer.game_id == game.id, GamePlayer.status == "alive")
+        )).all())
+        if game.phase == MafiaPhase.DAY_VOTING.value:
+            actors = {player.user_telegram_id for player in alive}
+            voted = set((await session.scalars(
+                select(GameAction.actor_telegram_id).where(
+                    GameAction.game_id == game.id,
+                    GameAction.phase_seq == game.phase_seq,
+                    GameAction.action_type == "day_vote",
+                )
+            )).all())
+            if actors and actors <= voted:
+                await self._advance_phase(session, game)
+                return True
+        elif game.phase == MafiaPhase.NIGHT_ACTIONS.value:
+            required = {
+                player.user_telegram_id
+                for player in alive
+                if player.role in {"mafia", "doctor", "commissioner"}
+            }
+            acted = set((await session.scalars(
+                select(GameAction.actor_telegram_id).where(
+                    GameAction.game_id == game.id,
+                    GameAction.phase_seq == game.phase_seq,
+                    GameAction.action_type.in_(("mafia_kill", "doctor_heal", "commissioner_check")),
+                )
+            )).all())
+            if required and required <= acted:
+                await self._advance_phase(session, game)
+                return True
+        return False
+
+    async def restore(self, session: AsyncSession, game: GameSession) -> None:
+        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+        if game is None or game.status not in {
+            GameSessionStatus.RUNNING.value,
+            GameSessionStatus.RECOVERING.value,
+        }:
             return
+        game.status = GameSessionStatus.RUNNING.value
         if game.deadline_at is None:
             game.deadline_at = datetime.now(timezone.utc) + timedelta(
                 seconds=self.definition.default_timeout_seconds
             )
-            await session.commit()
+        await session.commit()
