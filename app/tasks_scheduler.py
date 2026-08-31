@@ -52,7 +52,7 @@ async def background_loop(bot: Bot, redis: Redis, stop_event: asyncio.Event) -> 
     loop while heavier maintenance runs much less often.
     """
     await recover_interrupted_scheduled_messages()
-    await _run_job("recover_active_games", recover_active_games)
+    await _run_job("recover_active_games", lambda: recover_active_games(bot))
 
     last_run = {
         "permissions": 0.0,
@@ -71,7 +71,7 @@ async def background_loop(bot: Bot, redis: Redis, stop_event: asyncio.Event) -> 
         await _run_job("expire_captcha_sessions", lambda: expire_captcha_sessions(bot, redis))
         await _run_job("send_scheduled_messages", lambda: send_scheduled_messages(bot))
         await _run_job("deliver_pending_logs", lambda: deliver_pending_logs(bot))
-        await _run_job("process_game_timeouts", process_game_timeouts)
+        await _run_job("process_game_timeouts", lambda: process_game_timeouts(bot))
 
         if now - last_run["permissions"] >= PERMISSION_TASK_SECONDS:
             ok_lockdowns = await _run_job("expire_lockdowns", lambda: expire_lockdowns(bot))
