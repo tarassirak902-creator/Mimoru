@@ -14,6 +14,16 @@ def test_games_command_is_owned_by_game_engine() -> None:
     assert entertainment.index("game_handlers.router") < entertainment.index("group_help_full.router")
 
 
+def test_games_text_alias_is_exact_and_owned_by_game_engine() -> None:
+    source = (ROOT / "app/games/text_entry.py").read_text(encoding="utf-8")
+    entertainment = (ROOT / "app/handlers/fun_preferences.py").read_text(encoding="utf-8")
+
+    assert 'F.text.regexp(r"(?i)^игры$")' in source
+    assert "какие игры" not in source.casefold()
+    assert "router.include_router(game_text_entry.router)" in entertainment
+    assert entertainment.index("game_text_entry.router") < entertainment.index("game_handlers.router")
+
+
 def test_game_router_does_not_capture_ordinary_group_text() -> None:
     source = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
     assert "F.text.casefold()" not in source
