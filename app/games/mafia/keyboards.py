@@ -24,4 +24,10 @@ def mafia_action_keyboard(*, game_id: int, phase_seq: int, target_count: int) ->
                 )
                 for number in numbers[offset:offset + 5]
             ])
+    rows.append([
+        InlineKeyboardButton(
+            text="❌ Отменить игру",
+            callback_data=f"gm:mc:{game_id}:{phase_seq}",
+        )
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
