@@ -12,6 +12,8 @@ def test_mafia_callback_data_contains_no_target_user_id() -> None:
     assert "gm:ma:123:7:1" in callbacks
     assert "gm:mm:123:7:1" in callbacks
     assert "gm:mm:123:7:2" in callbacks
+    assert "gm:mr:123:7" in callbacks
+    assert "gm:mc:123:7" in callbacks
     assert all(callback is not None and len(callback.encode()) <= 64 for callback in callbacks)
 
 
@@ -27,6 +29,7 @@ def test_mafia_handlers_reject_stale_phase_and_lock_choice() -> None:
     source = (ROOT / "app/games/mafia/handlers.py").read_text(encoding="utf-8")
     assert "game.phase_seq != phase_seq" in source
     assert "прошлой фазе" in source
-    assert "Выбор принят и зафиксирован" in source
-    assert "Ваш выбор уже был принят" in source
-    assert "text[:200]" in source
+    assert "Выбор принят: №" in source
+    assert "Ваш выбор уже принят" in source
+    assert "callback.message.chat.id != group.telegram_chat_id" in source
+    assert "[:200]" in source
