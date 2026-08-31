@@ -109,7 +109,10 @@ async def finish_game(session: AsyncSession, game: GameSession, winning_team: st
     if game is None or game.status == GameSessionStatus.FINISHED.value:
         return
     players = list((await session.scalars(
-        select(GamePlayer).where(GamePlayer.game_id == game.id).order_by(GamePlayer.id).with_for_update()
+        select(GamePlayer)
+        .where(GamePlayer.game_id == game.id, GamePlayer.role.is_not(None))
+        .order_by(GamePlayer.id)
+        .with_for_update()
     )).all())
     settings = await session.get(GameGroupSettings, game.group_id)
     rating_enabled = settings.rating_enabled if settings is not None else True
