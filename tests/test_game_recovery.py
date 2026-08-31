@@ -13,13 +13,14 @@ def test_game_recovery_is_durable_and_serialized() -> None:
     assert "entry.engine.restore(session, game)" in source
     assert "game.status = GameSessionStatus.RECOVERING.value" in source
     assert 'game.finish_reason = "missing_game_engine"' in source
+    assert '_sync_engine_ui(bot, entry.engine, session, game)' in source
     assert '"game_recovered"' in source
     assert '"game_recovery_failed"' in source
 
 
 def test_game_timeouts_revalidate_deadline_under_lock() -> None:
     source = (ROOT / "app/games/recovery.py").read_text(encoding="utf-8")
-    timeout = source.split("async def process_game_timeouts()", 1)[1]
+    timeout = source.split("async def process_game_timeouts(bot: Bot | None = None)", 1)[1]
 
     assert "GameSession.deadline_at <= now" in timeout
     assert ".limit(100)" in timeout
@@ -27,6 +28,7 @@ def test_game_timeouts_revalidate_deadline_under_lock() -> None:
     assert "game.deadline_at > datetime.now(timezone.utc)" in timeout
     assert "entry.engine.handle_timeout(session, game)" in timeout
     assert "expected_phase_seq = game.phase_seq" in timeout
+    assert '"game_lobby_timeout"' in timeout
     assert '"game_timeout_processed"' in timeout
     assert '"game_timeout_failed"' in timeout
 
@@ -35,6 +37,6 @@ def test_game_jobs_use_existing_leader_scheduler() -> None:
     scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
 
     assert "from app.games.recovery import process_game_timeouts, recover_active_games" in scheduler
-    assert 'await _run_job("recover_active_games", recover_active_games)' in scheduler
-    assert 'await _run_job("process_game_timeouts", process_game_timeouts)' in scheduler
+    assert 'await _run_job("recover_active_games", lambda: recover_active_games(bot))' in scheduler
+    assert 'await _run_job("process_game_timeouts", lambda: process_game_timeouts(bot))' in scheduler
     assert scheduler.count("while not stop_event.is_set()") == 1
