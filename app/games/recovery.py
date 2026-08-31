@@ -7,8 +7,11 @@ from aiogram import Bot
 from sqlalchemy import select
 
 from app.db.game_models import GameSession
+from app.db.models import Group
 from app.db.session import SessionFactory
 from app.games.enums import GameSessionStatus
+from app.games.lobby import close_lobby_message
+from app.games.panels import ensure_game_panel
 from app.games.registry import game_registry
 
 
@@ -71,7 +74,7 @@ async def process_game_timeouts(bot: Bot | None = None) -> None:
         ids = list((await session.scalars(
             select(GameSession.id)
             .where(
-                GameSession.status == GameSessionStatus.RUNNING.value,
+                GameSession.status.in_((GameSessionStatus.LOBBY.value, GameSessionStatus.RUNNING.value)),
                 GameSession.deadline_at.is_not(None),
                 GameSession.deadline_at <= now,
             )
@@ -84,11 +87,33 @@ async def process_game_timeouts(bot: Bot | None = None) -> None:
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id).with_for_update())
             if (
                 game is None
-                or game.status != GameSessionStatus.RUNNING.value
+                or game.status not in {GameSessionStatus.LOBBY.value, GameSessionStatus.RUNNING.value}
                 or game.deadline_at is None
                 or game.deadline_at > datetime.now(timezone.utc)
             ):
                 continue
+            if game.status == GameSessionStatus.LOBBY.value:
+                game.status = GameSessionStatus.CANCELLED.value
+                game.phase = "cancelled"
+                game.phase_seq += 1
+                game.deadline_at = None
+                game.finished_at = datetime.now(timezone.utc)
+                game.finish_reason = "lobby_timeout"
+                await session.commit()
+                if bot is not None:
+                    group = await session.get(Group, game.group_id)
+                    if group is not None:
+                        await close_lobby_message(
+                            bot,
+                            session,
+                            group=group,
+                            game=game,
+                            text="⌛ Лобби закрыто: время ожидания истекло.",
+                        )
+                        await ensure_game_panel(bot, session, group=group, pin=False)
+                log.info("game_lobby_timeout", game_id=game.id, game_type=game.game_type)
+                continue
+
             entry = game_registry.get_entry(game.game_type)
             if entry is None:
                 game.status = GameSessionStatus.CANCELLED.value
