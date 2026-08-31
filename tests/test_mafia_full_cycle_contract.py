@@ -43,7 +43,8 @@ def test_mafia_game_contains_victory_afk_and_atomic_finish() -> None:
     resolution_source = (ROOT / "app/games/mafia/resolution.py").read_text(encoding="utf-8")
     assert "mafia >= town" in resolution_source
     assert 'mafia == 0' in resolution_source
-    assert "player.afk_count >= 2" in game_source
+    assert '"afk_strikes_to_remove"' in game_source
+    assert "player.afk_count >= threshold" in game_source
     assert 'player.status = "dead"' in game_source
     assert 'state.get("result_applied")' in resolution_source
     assert "commit=False" in resolution_source
