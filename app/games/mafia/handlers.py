@@ -78,6 +78,17 @@ async def _can_control(bot: Bot, session: AsyncSession, group: Group, game, user
     return await can_manage_group(bot, group, user_id, session)
 
 
+async def _commissioner_result(session: AsyncSession, game_id: int, target_user_id: int | None) -> str:
+    if target_user_id is None:
+        return "🔎 Результат проверки недоступен."
+    target = await _player(session, game_id, target_user_id)
+    return (
+        "🔎 Результат: игрок относится к Мафии."
+        if target is not None and target.team == "mafia"
+        else "🔎 Результат: игрок не относится к Мафии."
+    )
+
+
 @router.callback_query(F.data == "gm:rules:mafia")
 async def mafia_rules(callback: CallbackQuery) -> None:
     await callback.answer(
@@ -208,9 +219,8 @@ async def mafia_number_action(callback: CallbackQuery, bot: Bot, session: AsyncS
         return
 
     response = "✅ Выбор принят: №" + number_raw if created else "✅ Ваш выбор уже принят."
-    if created and player is not None and player.role == "commissioner" and action.target_telegram_id is not None:
-        target = await _player(session, game.id, action.target_telegram_id)
-        response = "🔎 Результат: игрок относится к Мафии." if target and target.team == "mafia" else "🔎 Результат: игрок не относится к Мафии."
+    if player is not None and player.role == "commissioner":
+        response = await _commissioner_result(session, game.id, action.target_telegram_id)
 
     if created:
         player = await _player(session, game.id, callback.from_user.id)
