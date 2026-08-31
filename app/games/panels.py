@@ -4,7 +4,7 @@ import structlog
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GamePanel, GamePlayerGameStats, GamePlayerStats, GameSession
@@ -14,6 +14,7 @@ from app.games.registry import GameRegistry, game_registry
 
 
 log = structlog.get_logger()
+_GAME_PANEL_LOCK_NAMESPACE = 4_676_944
 
 
 def panel_markup(*, active_game: GameSession | None) -> InlineKeyboardMarkup:
@@ -71,54 +72,64 @@ async def ensure_game_panel(
     group: Group,
     pin: bool = True,
 ) -> GamePanel | None:
-    active_game = await active_game_for_group(session, group.id)
-    text = panel_text(active_game=active_game)
-    markup = panel_markup(active_game=active_game)
-    panel = await session.get(GamePanel, group.id)
+    await session.execute(
+        text("SELECT pg_advisory_lock(:namespace, :group_id)"),
+        {"namespace": _GAME_PANEL_LOCK_NAMESPACE, "group_id": group.id},
+    )
+    try:
+        active_game = await active_game_for_group(session, group.id)
+        text_value = panel_text(active_game=active_game)
+        markup = panel_markup(active_game=active_game)
+        panel = await session.get(GamePanel, group.id)
 
-    if panel is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=group.telegram_chat_id,
-                message_id=panel.message_id,
-                text=text,
-                reply_markup=markup,
-            )
-            return panel
-        except TelegramBadRequest as error:
-            if "message is not modified" in str(error).casefold():
+        if panel is not None:
+            try:
+                await bot.edit_message_text(
+                    chat_id=group.telegram_chat_id,
+                    message_id=panel.message_id,
+                    text=text_value,
+                    reply_markup=markup,
+                )
                 return panel
-            log.info("game_panel_recreate", group_id=group.id, message_id=panel.message_id, error=str(error))
-        except TelegramForbiddenError as error:
-            log.warning("game_panel_edit_forbidden", group_id=group.id, error=str(error))
+            except TelegramBadRequest as error:
+                if "message is not modified" in str(error).casefold():
+                    return panel
+                log.info("game_panel_recreate", group_id=group.id, message_id=panel.message_id, error=str(error))
+            except TelegramForbiddenError as error:
+                log.warning("game_panel_edit_forbidden", group_id=group.id, error=str(error))
+                return None
+
+        try:
+            message = await bot.send_message(group.telegram_chat_id, text_value, reply_markup=markup)
+        except (TelegramBadRequest, TelegramForbiddenError) as error:
+            log.warning("game_panel_send_failed", group_id=group.id, error=str(error))
             return None
 
-    try:
-        message = await bot.send_message(group.telegram_chat_id, text, reply_markup=markup)
-    except (TelegramBadRequest, TelegramForbiddenError) as error:
-        log.warning("game_panel_send_failed", group_id=group.id, error=str(error))
-        return None
+        if panel is None:
+            panel = GamePanel(group_id=group.id, message_id=message.message_id, pinned=False)
+            session.add(panel)
+        else:
+            panel.message_id = message.message_id
+            panel.pinned = False
+        await session.commit()
 
-    if panel is None:
-        panel = GamePanel(group_id=group.id, message_id=message.message_id, pinned=False)
-        session.add(panel)
-    else:
-        panel.message_id = message.message_id
-        panel.pinned = False
-    await session.commit()
-
-    if pin:
-        try:
-            await bot.pin_chat_message(
-                group.telegram_chat_id,
-                message.message_id,
-                disable_notification=True,
-            )
-            panel.pinned = True
-            await session.commit()
-        except (TelegramBadRequest, TelegramForbiddenError) as error:
-            log.info("game_panel_pin_skipped", group_id=group.id, error=str(error))
-    return panel
+        if pin:
+            try:
+                await bot.pin_chat_message(
+                    group.telegram_chat_id,
+                    message.message_id,
+                    disable_notification=True,
+                )
+                panel.pinned = True
+                await session.commit()
+            except (TelegramBadRequest, TelegramForbiddenError) as error:
+                log.info("game_panel_pin_skipped", group_id=group.id, error=str(error))
+        return panel
+    finally:
+        await session.execute(
+            text("SELECT pg_advisory_unlock(:namespace, :group_id)"),
+            {"namespace": _GAME_PANEL_LOCK_NAMESPACE, "group_id": group.id},
+        )
 
 
 async def render_profile(session: AsyncSession, *, group_id: int, user_id: int, name: str) -> str:
