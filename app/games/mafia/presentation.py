@@ -69,9 +69,18 @@ def _night_result_text(state: dict) -> str:
     return "Ночь прошла без жертв."
 
 
+def _afk_text(state: dict) -> str | None:
+    removed = state.get("last_afk_removed") or []
+    if not removed:
+        return None
+    return "⌛ За повторное бездействие игру покидают: " + ", ".join(removed) + "."
+
+
 async def mafia_results_text(session: AsyncSession, game: GameSession) -> str:
     players = list((await session.scalars(
-        select(GamePlayer).where(GamePlayer.game_id == game.id).order_by(GamePlayer.id)
+        select(GamePlayer)
+        .where(GamePlayer.game_id == game.id, GamePlayer.role.is_not(None))
+        .order_by(GamePlayer.id)
     )).all())
     lines = ["📋 МАФИЯ · РЕЗУЛЬТАТЫ", ""]
     for player in players:
@@ -111,12 +120,18 @@ async def mafia_public_text(session: AsyncSession, game: GameSession) -> str:
         lines.append("Откройте свой список и нажмите номер игрока, которого хотите исключить.")
     elif game.phase == MafiaPhase.VOTING_RESULT.value:
         lines.append(_day_result_text(state))
+        afk = _afk_text(state)
+        if afk:
+            lines.append(afk)
     elif game.phase == MafiaPhase.NIGHT_START.value:
         lines.append("Город засыпает. Ночные роли готовятся сделать выбор.")
     elif game.phase == MafiaPhase.NIGHT_ACTIONS.value:
         lines.append("Ночные роли: откройте персональный список и нажмите номер цели. Остальные просто ждут.")
     elif game.phase == MafiaPhase.NIGHT_RESULT.value:
         lines.append(_night_result_text(state))
+        afk = _afk_text(state)
+        if afk:
+            lines.append(afk)
     return "\n".join(lines)
 
 
