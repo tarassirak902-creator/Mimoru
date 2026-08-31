@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GamePlayerGameStats, GamePlayerStats
@@ -21,6 +22,11 @@ async def _group_stats(
     group_id: int,
     user_telegram_id: int,
 ) -> GamePlayerStats:
+    await session.execute(
+        insert(GamePlayerStats)
+        .values(group_id=group_id, user_telegram_id=user_telegram_id)
+        .on_conflict_do_nothing(index_elements=["group_id", "user_telegram_id"])
+    )
     row = await session.scalar(
         select(GamePlayerStats)
         .where(
@@ -30,9 +36,7 @@ async def _group_stats(
         .with_for_update()
     )
     if row is None:
-        row = GamePlayerStats(group_id=group_id, user_telegram_id=user_telegram_id)
-        session.add(row)
-        await session.flush()
+        raise RuntimeError("failed to create or lock game player stats")
     return row
 
 
@@ -43,6 +47,15 @@ async def _game_stats(
     user_telegram_id: int,
     game_type: str,
 ) -> GamePlayerGameStats:
+    await session.execute(
+        insert(GamePlayerGameStats)
+        .values(
+            group_id=group_id,
+            user_telegram_id=user_telegram_id,
+            game_type=game_type,
+        )
+        .on_conflict_do_nothing(index_elements=["group_id", "user_telegram_id", "game_type"])
+    )
     row = await session.scalar(
         select(GamePlayerGameStats)
         .where(
@@ -53,13 +66,7 @@ async def _game_stats(
         .with_for_update()
     )
     if row is None:
-        row = GamePlayerGameStats(
-            group_id=group_id,
-            user_telegram_id=user_telegram_id,
-            game_type=game_type,
-        )
-        session.add(row)
-        await session.flush()
+        raise RuntimeError("failed to create or lock game-specific player stats")
     return row
 
 
