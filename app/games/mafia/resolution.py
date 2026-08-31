@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GameAction, GamePlayer, GameResult, GameSession
+from app.db.game_models import GameAction, GameGroupSettings, GamePlayer, GameResult, GameSession
 from app.games.enums import GameSessionStatus
 from app.games.stats import apply_game_result
 
@@ -52,11 +52,9 @@ async def resolve_day_vote(session: AsyncSession, game: GameSession) -> dict:
             target.status = "dead"
             result["executed_user_id"] = target.user_telegram_id
             result["executed_name"] = target.display_name
-            result["executed_role"] = target.role
     state = dict(game.state_json or {})
     state["last_day_result"] = result
     game.state_json = state
-    await session.commit()
     return result
 
 
@@ -87,17 +85,11 @@ async def resolve_night(session: AsyncSession, game: GameSession) -> dict:
         if victim is not None and victim.status == "alive":
             victim.status = "dead"
             result["killed_name"] = victim.display_name
-            result["killed_role"] = victim.role
+    state = dict(game.state_json or {})
     if doctor_action is not None:
-        state = dict(game.state_json or {})
         state["last_healed_user_id"] = heal_id
-        state["last_night_result"] = result
-        game.state_json = state
-    else:
-        state = dict(game.state_json or {})
-        state["last_night_result"] = result
-        game.state_json = state
-    await session.commit()
+    state["last_night_result"] = result
+    game.state_json = state
     return result
 
 
@@ -119,6 +111,8 @@ async def finish_game(session: AsyncSession, game: GameSession, winning_team: st
     players = list((await session.scalars(
         select(GamePlayer).where(GamePlayer.game_id == game.id).order_by(GamePlayer.id).with_for_update()
     )).all())
+    settings = await session.get(GameGroupSettings, game.group_id)
+    rating_enabled = settings.rating_enabled if settings is not None else True
     now = datetime.now(timezone.utc)
     game.status = GameSessionStatus.FINISHED.value
     game.phase = "finished"
@@ -138,13 +132,19 @@ async def finish_game(session: AsyncSession, game: GameSession, winning_team: st
             summary_json={"rounds": game.round_no, "players": len(players)},
             duration_seconds=duration,
         ))
-    await session.commit()
     for player in players:
+        state = dict(player.state_json or {})
+        if state.get("result_applied"):
+            continue
         await apply_game_result(
             session,
             group_id=game.group_id,
             game_type=game.game_type,
             user_telegram_id=player.user_telegram_id,
             won=player.team == winning_team,
-            rating_enabled=True,
+            rating_enabled=rating_enabled,
+            commit=False,
         )
+        state["result_applied"] = True
+        player.state_json = state
+    await session.commit()
