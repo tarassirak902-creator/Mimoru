@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import structlog
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GameMessage, GameSession
@@ -15,14 +18,15 @@ from app.games.registry import GameRegistry, game_registry
 log = structlog.get_logger()
 
 
-def lobby_markup(game_id: int) -> InlineKeyboardMarkup:
+def lobby_markup(game_id: int, game_type: str) -> InlineKeyboardMarkup:
+    start_callback = f"gm:ms:{game_id}" if game_type == "mafia" else f"gm:s:{game_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="➕ Присоединиться", callback_data=f"gm:j:{game_id}"),
             InlineKeyboardButton(text="➖ Выйти", callback_data=f"gm:l:{game_id}"),
         ],
         [
-            InlineKeyboardButton(text="▶️ Начать", callback_data=f"gm:s:{game_id}"),
+            InlineKeyboardButton(text="▶️ Начать", callback_data=start_callback),
             InlineKeyboardButton(text="❌ Отменить", callback_data=f"gm:c:{game_id}"),
         ],
     ])
@@ -62,7 +66,7 @@ async def ensure_lobby_message(
     manager: GameManager,
 ) -> int | None:
     text = await lobby_text(session, game=game, manager=manager)
-    markup = lobby_markup(game.id)
+    markup = lobby_markup(game.id, game.game_type)
 
     if game.lobby_message_id is not None:
         try:
@@ -76,36 +80,25 @@ async def ensure_lobby_message(
         except TelegramBadRequest as error:
             if "message is not modified" in str(error).casefold():
                 return game.lobby_message_id
-            log.info(
-                "game_lobby_recreate",
-                game_id=game.id,
-                message_id=game.lobby_message_id,
-                error=str(error),
-            )
+            log.info("game_lobby_recreate", game_id=game.id, message_id=game.lobby_message_id, error=str(error))
         except TelegramForbiddenError as error:
             log.warning("game_lobby_edit_forbidden", game_id=game.id, error=str(error))
             return None
 
     try:
-        message = await bot.send_message(
-            group.telegram_chat_id,
-            text,
-            reply_markup=markup,
-        )
+        message = await bot.send_message(group.telegram_chat_id, text, reply_markup=markup)
     except (TelegramBadRequest, TelegramForbiddenError) as error:
         log.warning("game_lobby_send_failed", game_id=game.id, error=str(error))
         return None
 
     game.lobby_message_id = message.message_id
-    session.add(
-        GameMessage(
-            game_id=game.id,
-            chat_id=group.telegram_chat_id,
-            message_id=message.message_id,
-            kind="lobby",
-            active=True,
-        )
-    )
+    session.add(GameMessage(
+        game_id=game.id,
+        chat_id=group.telegram_chat_id,
+        message_id=message.message_id,
+        kind="lobby",
+        active=True,
+    ))
     await session.commit()
     return message.message_id
 
@@ -130,8 +123,6 @@ async def close_lobby_message(
     except (TelegramBadRequest, TelegramForbiddenError) as error:
         log.info("game_lobby_close_skipped", game_id=game.id, error=str(error))
 
-    from sqlalchemy import select
-
     record = await session.scalar(
         select(GameMessage).where(
             GameMessage.game_id == game.id,
@@ -140,8 +131,6 @@ async def close_lobby_message(
         )
     )
     if record is not None:
-        from datetime import datetime, timezone
-
         record.active = False
         record.retired_at = datetime.now(timezone.utc)
         await session.commit()
