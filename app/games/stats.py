@@ -30,10 +30,7 @@ async def _group_stats(
         .with_for_update()
     )
     if row is None:
-        row = GamePlayerStats(
-            group_id=group_id,
-            user_telegram_id=user_telegram_id,
-        )
+        row = GamePlayerStats(group_id=group_id, user_telegram_id=user_telegram_id)
         session.add(row)
         await session.flush()
     return row
@@ -75,6 +72,7 @@ async def apply_game_result(
     won: bool,
     score_delta: int = 0,
     rating_enabled: bool = True,
+    commit: bool = True,
 ) -> None:
     group_stats = await _group_stats(
         session,
@@ -104,4 +102,5 @@ async def apply_game_result(
     else:
         group_stats.win_streak = 0
 
-    await session.commit()
+    if commit:
+        await session.commit()
