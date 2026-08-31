@@ -30,6 +30,17 @@ class MafiaPhase(StrEnum):
     FINISHED = "finished"
 
 
+RECOVERABLE_MAFIA_PHASES = frozenset({
+    MafiaPhase.DAY_START.value,
+    MafiaPhase.DISCUSSION.value,
+    MafiaPhase.DAY_VOTING.value,
+    MafiaPhase.VOTING_RESULT.value,
+    MafiaPhase.NIGHT_START.value,
+    MafiaPhase.NIGHT_ACTIONS.value,
+    MafiaPhase.NIGHT_RESULT.value,
+})
+
+
 mafia_definition = GameDefinition(
     code="mafia",
     title="🐺 Мафия",
@@ -281,6 +292,21 @@ class MafiaGame(BaseGame):
             GameSessionStatus.RECOVERING.value,
         }:
             return
+
+        if game.phase in {"starting", "recovering"}:
+            game.status = GameSessionStatus.RUNNING.value
+            await self.start(session, game)
+            log.info(
+                "mafia_start_recovered",
+                game_id=game.id,
+                phase=game.phase,
+                phase_seq=game.phase_seq,
+            )
+            return
+
+        if game.phase not in RECOVERABLE_MAFIA_PHASES:
+            raise ValueError(f"invalid mafia recovery phase: {game.phase}")
+
         game.status = GameSessionStatus.RUNNING.value
         if game.deadline_at is None:
             game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=self.definition.default_timeout_seconds)
