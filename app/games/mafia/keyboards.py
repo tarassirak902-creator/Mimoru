@@ -12,10 +12,20 @@ def mafia_action_keyboard(*, game_id: int, phase_seq: int, target_count: int) ->
     ]]
     numbers = list(range(1, target_count + 1))
     if numbers:
-        rows.append([
-            InlineKeyboardButton(text="👁 1–7", callback_data=f"gm:mm:{game_id}:{phase_seq}:1"),
-            InlineKeyboardButton(text="👁 8–15", callback_data=f"gm:mm:{game_id}:{phase_seq}:2"),
-        ])
+        map_buttons = [
+            InlineKeyboardButton(
+                text=f"👁 1–{min(7, target_count)}",
+                callback_data=f"gm:mm:{game_id}:{phase_seq}:1",
+            )
+        ]
+        if target_count > 7:
+            map_buttons.append(
+                InlineKeyboardButton(
+                    text=f"👁 8–{target_count}",
+                    callback_data=f"gm:mm:{game_id}:{phase_seq}:2",
+                )
+            )
+        rows.append(map_buttons)
         for offset in range(0, len(numbers), 5):
             rows.append([
                 InlineKeyboardButton(
