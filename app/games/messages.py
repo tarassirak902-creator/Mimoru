@@ -7,12 +7,15 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GameMessage
+from app.games.locks import advisory_xact_lock
 
 
 log = structlog.get_logger()
+_GAME_PHASE_MESSAGE_LOCK_NAMESPACE = 4_676_945
 
 
 async def register_game_message(
@@ -23,6 +26,26 @@ async def register_game_message(
     message_id: int,
     kind: str = "temporary",
 ) -> GameMessage:
+    await session.execute(
+        insert(GameMessage)
+        .values(
+            game_id=game_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            kind=kind,
+            active=True,
+        )
+        .on_conflict_do_update(
+            index_elements=["game_id", "message_id"],
+            set_={
+                "chat_id": chat_id,
+                "kind": kind,
+                "active": True,
+                "retired_at": None,
+            },
+        )
+    )
+    await session.commit()
     record = await session.scalar(
         select(GameMessage).where(
             GameMessage.game_id == game_id,
@@ -30,21 +53,7 @@ async def register_game_message(
         )
     )
     if record is None:
-        record = GameMessage(
-            game_id=game_id,
-            chat_id=chat_id,
-            message_id=message_id,
-            kind=kind,
-            active=True,
-        )
-        session.add(record)
-    else:
-        record.chat_id = chat_id
-        record.kind = kind
-        record.active = True
-        record.retired_at = None
-    await session.commit()
-    await session.refresh(record)
+        raise RuntimeError("failed to register game message")
     return record
 
 
@@ -131,50 +140,62 @@ async def upsert_phase_message(
     reply_markup: InlineKeyboardMarkup | None = None,
     kind: str = "phase",
 ) -> Message | None:
-    existing = await session.scalar(
-        select(GameMessage)
-        .where(
-            GameMessage.game_id == game_id,
-            GameMessage.kind == kind,
-            GameMessage.active.is_(True),
-        )
-        .order_by(GameMessage.id.desc())
-        .limit(1)
-    )
-    if existing is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=existing.chat_id,
-                message_id=existing.message_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            return None
-        except TelegramBadRequest as error:
-            if "message is not modified" in str(error).casefold():
-                return None
-            existing.active = False
-            existing.retired_at = datetime.now(timezone.utc)
-            await session.commit()
-        except TelegramForbiddenError as error:
-            log.info(
-                "game_phase_message_edit_forbidden",
-                game_id=game_id,
-                message_id=existing.message_id,
-                error=str(error),
-            )
-            return None
-
-    try:
-        message = await bot.send_message(chat_id, text, reply_markup=reply_markup)
-    except (TelegramBadRequest, TelegramForbiddenError) as error:
-        log.warning("game_phase_message_send_failed", game_id=game_id, error=str(error))
-        return None
-    await register_game_message(
+    await advisory_xact_lock(
         session,
-        game_id=game_id,
-        chat_id=chat_id,
-        message_id=message.message_id,
-        kind=kind,
+        namespace=_GAME_PHASE_MESSAGE_LOCK_NAMESPACE,
+        key=game_id,
     )
-    return message
+    try:
+        existing = await session.scalar(
+            select(GameMessage)
+            .where(
+                GameMessage.game_id == game_id,
+                GameMessage.kind == kind,
+                GameMessage.active.is_(True),
+            )
+            .order_by(GameMessage.id.desc())
+            .limit(1)
+        )
+        if existing is not None:
+            try:
+                await bot.edit_message_text(
+                    chat_id=existing.chat_id,
+                    message_id=existing.message_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
+                await session.commit()
+                return None
+            except TelegramBadRequest as error:
+                if "message is not modified" in str(error).casefold():
+                    await session.commit()
+                    return None
+                existing.active = False
+                existing.retired_at = datetime.now(timezone.utc)
+            except TelegramForbiddenError as error:
+                log.info(
+                    "game_phase_message_edit_forbidden",
+                    game_id=game_id,
+                    message_id=existing.message_id,
+                    error=str(error),
+                )
+                await session.commit()
+                return None
+
+        try:
+            message = await bot.send_message(chat_id, text, reply_markup=reply_markup)
+        except (TelegramBadRequest, TelegramForbiddenError) as error:
+            log.warning("game_phase_message_send_failed", game_id=game_id, error=str(error))
+            await session.commit()
+            return None
+        await register_game_message(
+            session,
+            game_id=game_id,
+            chat_id=chat_id,
+            message_id=message.message_id,
+            kind=kind,
+        )
+        return message
+    except Exception:
+        await session.rollback()
+        raise
