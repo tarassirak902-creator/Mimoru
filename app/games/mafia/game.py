@@ -71,6 +71,7 @@ class MafiaGame(BaseGame):
             player.role = role
             player.team = "mafia" if role == "mafia" else "town"
             player.status = "alive"
+            player.afk_count = 0
             player.state_json = {"role_revealed": False, "result_applied": False}
         game.phase = MafiaPhase.DAY_START.value
         game.phase_seq += 1
@@ -82,6 +83,7 @@ class MafiaGame(BaseGame):
             "last_healed_user_id": None,
             "last_day_result": None,
             "last_night_result": None,
+            "last_afk_removed": [],
         }
         game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=15)
         await session.commit()
@@ -96,6 +98,43 @@ class MafiaGame(BaseGame):
         value: int | str | None = None,
     ) -> None:
         raise ValueError(f"unsupported mafia action: {action}")
+
+    async def _penalize_missing_actions(self, session: AsyncSession, game: GameSession, phase: str) -> None:
+        players = list((await session.scalars(
+            select(GamePlayer)
+            .where(GamePlayer.game_id == game.id, GamePlayer.status == "alive")
+            .with_for_update()
+        )).all())
+        if phase == MafiaPhase.DAY_VOTING.value:
+            required = {player.user_telegram_id for player in players}
+            action_types = ("day_vote",)
+        elif phase == MafiaPhase.NIGHT_ACTIONS.value:
+            required = {
+                player.user_telegram_id
+                for player in players
+                if player.role in {"mafia", "doctor", "commissioner"}
+            }
+            action_types = ("mafia_kill", "doctor_heal", "commissioner_check")
+        else:
+            return
+        acted = set((await session.scalars(
+            select(GameAction.actor_telegram_id).where(
+                GameAction.game_id == game.id,
+                GameAction.phase_seq == game.phase_seq,
+                GameAction.action_type.in_(action_types),
+            )
+        )).all())
+        removed: list[str] = []
+        for player in players:
+            if player.user_telegram_id not in required or player.user_telegram_id in acted:
+                continue
+            player.afk_count += 1
+            if player.afk_count >= 2:
+                player.status = "dead"
+                removed.append(player.display_name)
+        state = dict(game.state_json or {})
+        state["last_afk_removed"] = removed
+        game.state_json = state
 
     async def _advance_phase(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
@@ -113,6 +152,7 @@ class MafiaGame(BaseGame):
             game.deadline_at = now + timedelta(seconds=60)
         elif current == MafiaPhase.DAY_VOTING.value:
             await resolve_day_vote(session, game)
+            await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
@@ -130,6 +170,7 @@ class MafiaGame(BaseGame):
             game.deadline_at = now + timedelta(seconds=60)
         elif current == MafiaPhase.NIGHT_ACTIONS.value:
             await resolve_night(session, game)
+            await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
@@ -141,6 +182,7 @@ class MafiaGame(BaseGame):
             game.round_no += 1
             state = dict(game.state_json or {})
             state["day"] = int(state.get("day", 1)) + 1
+            state["last_afk_removed"] = []
             game.state_json = state
             game.phase = MafiaPhase.DAY_START.value
             game.phase_seq += 1
