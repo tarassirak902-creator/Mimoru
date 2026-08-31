@@ -345,7 +345,7 @@ async def game_start_lobby(callback: CallbackQuery, bot: Bot, session: AsyncSess
     engine = game_registry.engine(game.game_type)
     try:
         await engine.start(session, game)
-    except Exception as error:
+    except Exception:
         locked = await manager.get_game(session, game_id=game.id, for_update=True)
         if locked is not None and locked.status == GameSessionStatus.RUNNING.value:
             locked.status = GameSessionStatus.RECOVERING.value
@@ -414,6 +414,19 @@ async def game_open(callback: CallbackQuery, bot: Bot, session: AsyncSession) ->
     if game.status not in {GameSessionStatus.RUNNING.value, GameSessionStatus.RECOVERING.value}:
         await callback.answer("❌ Эта игровая сессия уже завершена.", show_alert=True)
         return
+
+    entry = game_registry.get_entry(game.game_type)
+    sync_ui = getattr(entry.engine, "sync_ui", None) if entry is not None else None
+    if sync_ui is not None:
+        try:
+            await sync_ui(bot, session, game)
+        except Exception:
+            log.exception("game_open_sync_failed", game_id=game.id, game_type=game.game_type)
+            await callback.answer("Не удалось открыть карточку игры. Попробуйте ещё раз.", show_alert=True)
+            return
+        await callback.answer("👀 Актуальная карточка игры обновлена")
+        return
+
     await callback.answer(
         f"{game_registry.require(game.game_type).title}: фаза {game.phase}, раунд {game.round_no}.",
         show_alert=True,
