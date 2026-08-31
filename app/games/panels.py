@@ -7,8 +7,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GamePanel, GamePlayerStats, GameSession
-from app.db.models import Group
+from app.db.game_models import GamePanel, GamePlayerGameStats, GamePlayerStats, GameSession
+from app.db.models import Group, User
 from app.games.enums import ACTIVE_SESSION_STATUSES
 from app.games.registry import GameRegistry, game_registry
 
@@ -88,22 +88,13 @@ async def ensure_game_panel(
         except TelegramBadRequest as error:
             if "message is not modified" in str(error).casefold():
                 return panel
-            log.info(
-                "game_panel_recreate",
-                group_id=group.id,
-                message_id=panel.message_id,
-                error=str(error),
-            )
+            log.info("game_panel_recreate", group_id=group.id, message_id=panel.message_id, error=str(error))
         except TelegramForbiddenError as error:
             log.warning("game_panel_edit_forbidden", group_id=group.id, error=str(error))
             return None
 
     try:
-        message = await bot.send_message(
-            group.telegram_chat_id,
-            text,
-            reply_markup=markup,
-        )
+        message = await bot.send_message(group.telegram_chat_id, text, reply_markup=markup)
     except (TelegramBadRequest, TelegramForbiddenError) as error:
         log.warning("game_panel_send_failed", group_id=group.id, error=str(error))
         return None
@@ -138,35 +129,54 @@ async def render_profile(session: AsyncSession, *, group_id: int, user_id: int, 
         )
     )
     if stats is None:
-        return (
-            f"👤 {name}\n\n"
-            "🎮 Игр: 0\n🏆 Побед: 0\n⭐ Рейтинг: 1000\n🔥 Серия побед: 0"
-        )
-    return (
-        f"👤 {name}\n\n"
-        f"🎮 Игр: {stats.games_played}\n"
-        f"🏆 Побед: {stats.wins}\n"
-        f"⭐ Рейтинг: {stats.rating}\n"
-        f"🔥 Серия побед: {stats.win_streak}"
-    )
+        return f"👤 {name}\n\n🎮 Игр: 0\n🏆 Побед: 0\n⭐ Рейтинг: 1000\n🔥 Серия побед: 0"
+    per_game = list((await session.scalars(
+        select(GamePlayerGameStats)
+        .where(GamePlayerGameStats.group_id == group_id, GamePlayerGameStats.user_telegram_id == user_id)
+        .order_by(GamePlayerGameStats.games_played.desc())
+        .limit(3)
+    )).all())
+    lines = [
+        f"👤 {name}",
+        "",
+        f"🎮 Игр: {stats.games_played}",
+        f"🏆 Побед: {stats.wins}",
+        f"⭐ Рейтинг: {stats.rating}",
+        f"🔥 Серия побед: {stats.win_streak}",
+    ]
+    for row in per_game:
+        title = game_registry.get(row.game_type)
+        label = title.title if title is not None else row.game_type
+        lines.append(f"{label}: {row.wins} побед / {row.games_played} игр")
+    return "\n".join(lines)[:200]
+
+
+def _user_name(user: User | None, telegram_id: int) -> str:
+    if user is None:
+        return f"Игрок {telegram_id}"
+    full = " ".join(part for part in (user.first_name, user.last_name) if part).strip()
+    if full:
+        return full
+    if user.username:
+        return f"@{user.username}"
+    return f"Игрок {telegram_id}"
 
 
 async def render_rating(session: AsyncSession, *, group_id: int) -> str:
-    rows = list(
-        (
-            await session.scalars(
-                select(GamePlayerStats)
-                .where(GamePlayerStats.group_id == group_id)
-                .order_by(GamePlayerStats.rating.desc(), GamePlayerStats.games_played.desc())
-                .limit(10)
-            )
-        ).all()
-    )
+    rows = list((await session.scalars(
+        select(GamePlayerStats)
+        .where(GamePlayerStats.group_id == group_id)
+        .order_by(GamePlayerStats.rating.desc(), GamePlayerStats.games_played.desc())
+        .limit(10)
+    )).all())
     if not rows:
         return "🏆 РЕЙТИНГ ИГРОКОВ\n\nРейтинговых игр в этой группе ещё не было."
+    ids = [row.user_telegram_id for row in rows]
+    users = list((await session.scalars(select(User).where(User.telegram_id.in_(ids)))).all())
+    by_id = {user.telegram_id: user for user in users}
     lines = ["🏆 РЕЙТИНГ ИГРОКОВ", ""]
     medals = ("🥇", "🥈", "🥉")
     for index, stats in enumerate(rows, start=1):
         prefix = medals[index - 1] if index <= 3 else f"{index}."
-        lines.append(f"{prefix} ID {stats.user_telegram_id} — {stats.rating}")
+        lines.append(f"{prefix} {_user_name(by_id.get(stats.user_telegram_id), stats.user_telegram_id)} — {stats.rating}")
     return "\n".join(lines)
