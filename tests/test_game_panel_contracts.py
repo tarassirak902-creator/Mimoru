@@ -38,3 +38,15 @@ def test_game_panel_has_single_persistent_group_key() -> None:
     panel = models.split("class GamePanel", 1)[1].split("class GameSession", 1)[0]
     assert 'ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True' in panel
     assert "message_id" in panel
+
+
+def test_open_active_game_synchronizes_real_game_ui() -> None:
+    source = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
+    handler = source.split("async def game_open(", 1)[1]
+
+    assert 'r"^gm:open:' in source
+    assert "game_registry.get_entry(game.game_type)" in handler
+    assert 'getattr(entry.engine, "sync_ui", None)' in handler
+    assert "await sync_ui(bot, session, game)" in handler
+    assert "game_open_sync_failed" in handler
+    assert "Актуальная карточка игры обновлена" in handler
