@@ -23,6 +23,12 @@ PHASE_TITLES = {
     MafiaPhase.NIGHT_ACTIONS.value: "🌙 НОЧНЫЕ ДЕЙСТВИЯ",
     MafiaPhase.NIGHT_RESULT.value: "🌅 ИТОГ НОЧИ",
 }
+ROLE_LABELS = {
+    "civilian": "👨 Мирный",
+    "mafia": "🔪 Мафия",
+    "doctor": "🩺 Доктор",
+    "commissioner": "🕵️ Комиссар",
+}
 
 
 async def _alive_count(session: AsyncSession, game_id: int) -> int:
@@ -63,6 +69,17 @@ def _night_result_text(state: dict) -> str:
     return "Ночь прошла без жертв."
 
 
+async def mafia_results_text(session: AsyncSession, game: GameSession) -> str:
+    players = list((await session.scalars(
+        select(GamePlayer).where(GamePlayer.game_id == game.id).order_by(GamePlayer.id)
+    )).all())
+    lines = ["📋 МАФИЯ · РЕЗУЛЬТАТЫ", ""]
+    for player in players:
+        status = "✅" if player.status == "alive" else "💀"
+        lines.append(f"{status} {player.display_name} — {ROLE_LABELS.get(player.role or '', 'роль неизвестна')}")
+    return "\n".join(lines)
+
+
 async def mafia_public_text(session: AsyncSession, game: GameSession) -> str:
     alive = await _alive_count(session, game.id)
     state = dict(game.state_json or {})
@@ -74,8 +91,17 @@ async def mafia_public_text(session: AsyncSession, game: GameSession) -> str:
             f"🎮 Раундов: {game.round_no}\n\n"
             "Результат сохранён в профилях и рейтинге группы."
         )
+    if game.status == GameSessionStatus.CANCELLED.value:
+        return "❌ МАФИЯ ОТМЕНЕНА\n\nИгровая сессия закрыта. Группа снова свободна для новой игры."
     title = PHASE_TITLES.get(game.phase, "🐺 МАФИЯ")
-    lines = ["🐺 МАФИЯ", "", title, f"🔄 День: {state.get('day', game.round_no or 1)}", f"👥 Живых: {alive}", ""]
+    lines = [
+        "🐺 МАФИЯ",
+        "",
+        title,
+        f"🔄 День: {state.get('day', game.round_no or 1)}",
+        f"👥 Живых: {alive}",
+        "",
+    ]
     if game.phase == MafiaPhase.DAY_START.value:
         lines.append("Проверьте свою роль кнопкой ниже. Скоро начнётся обсуждение.")
     elif game.phase == MafiaPhase.DISCUSSION.value:
@@ -94,6 +120,14 @@ async def mafia_public_text(session: AsyncSession, game: GameSession) -> str:
     return "\n".join(lines)
 
 
+def finished_markup(game: GameSession) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="🔄 Сыграть ещё", callback_data="gm:new:mafia")]]
+    if game.status == GameSessionStatus.FINISHED.value:
+        rows.append([InlineKeyboardButton(text="📋 Результаты", callback_data=f"gm:mres:{game.id}")])
+    rows.append([InlineKeyboardButton(text="🏆 Рейтинг", callback_data="gm:rating")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def sync_mafia_ui(bot: Bot, session: AsyncSession, game: GameSession) -> None:
     game = await session.get(GameSession, game.id)
     if game is None:
@@ -102,11 +136,8 @@ async def sync_mafia_ui(bot: Bot, session: AsyncSession, game: GameSession) -> N
     if group is None or not group.is_active:
         return
     text = await mafia_public_text(session, game)
-    if game.status == GameSessionStatus.FINISHED.value:
-        markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Сыграть ещё", callback_data="gm:new:mafia")],
-            [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="gm:rating")],
-        ])
+    if game.status in {GameSessionStatus.FINISHED.value, GameSessionStatus.CANCELLED.value}:
+        markup = finished_markup(game)
     else:
         target_count = 15 if game.phase in {MafiaPhase.DAY_VOTING.value, MafiaPhase.NIGHT_ACTIONS.value} else 0
         markup = mafia_action_keyboard(game_id=game.id, phase_seq=game.phase_seq, target_count=target_count)
