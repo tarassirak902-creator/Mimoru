@@ -44,7 +44,13 @@ async def _run_job(name: str, job: Callable[[], Awaitable[None]]) -> bool:
 
 
 async def background_loop(bot: Bot, redis: Redis, stop_event: asyncio.Event) -> None:
-    """Run background work at a cadence matching each job's actual urgency."""
+    """Run background work at a cadence matching each job's actual urgency.
+
+    Previously every task ran on the same five-second loop. That forced daily,
+    subscription and weekly/monthly maintenance jobs to rescan the database up
+    to twelve times per minute. Urgent expiry/delivery work remains on the fast
+    loop while heavier maintenance runs much less often.
+    """
     await recover_interrupted_scheduled_messages()
     await _run_job("recover_active_games", lambda: recover_active_games(bot))
 
@@ -60,6 +66,7 @@ async def background_loop(bot: Bot, redis: Redis, stop_event: asyncio.Event) -> 
     while not stop_event.is_set():
         now = time.monotonic()
 
+        # Fast, user-visible work: keep the existing five-second response bound.
         await _run_job("expire_punishments", lambda: expire_punishments(bot, redis))
         await _run_job("expire_captcha_sessions", lambda: expire_captcha_sessions(bot, redis))
         await _run_job("send_scheduled_messages", lambda: send_scheduled_messages(bot))
@@ -95,4 +102,4 @@ async def background_loop(bot: Bot, redis: Redis, stop_event: asyncio.Event) -> 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=FAST_LOOP_SECONDS)
         except TimeoutError:
-            pass
+            continue
