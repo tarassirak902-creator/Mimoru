@@ -150,11 +150,12 @@ async def sync_mafia_ui(bot: Bot, session: AsyncSession, game: GameSession) -> N
     group = await session.get(Group, game.group_id)
     if group is None or not group.is_active:
         return
+    alive = await _alive_count(session, game.id)
     text = await mafia_public_text(session, game)
     if game.status in {GameSessionStatus.FINISHED.value, GameSessionStatus.CANCELLED.value}:
         markup = finished_markup(game)
     else:
-        target_count = 15 if game.phase in {MafiaPhase.DAY_VOTING.value, MafiaPhase.NIGHT_ACTIONS.value} else 0
+        target_count = alive if game.phase in {MafiaPhase.DAY_VOTING.value, MafiaPhase.NIGHT_ACTIONS.value} else 0
         markup = mafia_action_keyboard(game_id=game.id, phase_seq=game.phase_seq, target_count=target_count)
     await upsert_phase_message(
         bot,
