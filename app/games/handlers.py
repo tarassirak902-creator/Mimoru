@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.game_models import GameGroupSettings, GamePlayer, GameSession
 from app.db.models import Group
 from app.games.enums import GameSessionStatus
+from app.games.game_center import send_game_center_snapshot
 from app.games.lobby import close_lobby_message, ensure_lobby_message
 from app.games.manager import GameConflictError, GameManager, GameNotFoundError, GamePlayerError
 from app.games.panels import ensure_game_panel, render_profile, render_rating
@@ -126,7 +127,12 @@ async def games_command(message: Message, bot: Bot, session: AsyncSession) -> No
     group = await _active_group(session, message.chat.id)
     if group is None:
         return
-    await ensure_game_panel(bot, session, group=group)
+    await send_game_center_snapshot(
+        bot,
+        session,
+        group=group,
+        reply_to_message_id=message.message_id,
+    )
 
 
 @router.callback_query(F.data == "gm:home")
