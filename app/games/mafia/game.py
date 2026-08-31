@@ -54,9 +54,7 @@ class MafiaGame(BaseGame):
     def _role_deck(count: int) -> list[str]:
         mafia_count = max(1, count // 4)
         roles = ["mafia"] * mafia_count
-        roles.append("doctor")
-        if count >= 5:
-            roles.append("commissioner")
+        roles.extend(["doctor", "commissioner"])
         roles.extend(["civilian"] * (count - len(roles)))
         random.SystemRandom().shuffle(roles)
         return roles
@@ -202,3 +200,8 @@ class MafiaGame(BaseGame):
                 seconds=self.definition.default_timeout_seconds
             )
         await session.commit()
+
+    async def sync_ui(self, bot, session: AsyncSession, game: GameSession) -> None:
+        from app.games.mafia.presentation import sync_mafia_ui
+
+        await sync_mafia_ui(bot, session, game)
