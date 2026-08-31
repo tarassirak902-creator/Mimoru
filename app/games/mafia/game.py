@@ -182,10 +182,25 @@ class MafiaGame(BaseGame):
         if removed:
             log.info("mafia_afk_removed", game_id=game.id, phase=phase, count=len(removed))
 
-    async def _advance_phase(self, session: AsyncSession, game: GameSession) -> None:
+    async def _advance_phase(
+        self,
+        session: AsyncSession,
+        game: GameSession,
+        *,
+        expected_phase_seq: int,
+    ) -> bool:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
         if game is None or game.status != GameSessionStatus.RUNNING.value:
-            return
+            return False
+        if game.phase_seq != expected_phase_seq:
+            log.info(
+                "mafia_phase_advance_stale",
+                game_id=game.id,
+                expected_phase_seq=expected_phase_seq,
+                current_phase_seq=game.phase_seq,
+                phase=game.phase,
+            )
+            return False
         now = datetime.now(timezone.utc)
         current = game.phase
         if current == MafiaPhase.DAY_START.value:
@@ -203,7 +218,7 @@ class MafiaGame(BaseGame):
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
                 log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
-                return
+                return True
             game.phase = MafiaPhase.VOTING_RESULT.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=self._seconds(game, "result", 10))
@@ -222,7 +237,7 @@ class MafiaGame(BaseGame):
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
                 log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
-                return
+                return True
             game.phase = MafiaPhase.NIGHT_RESULT.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=self._seconds(game, "result", 10))
@@ -235,6 +250,8 @@ class MafiaGame(BaseGame):
             game.phase = MafiaPhase.DAY_START.value
             game.phase_seq += 1
             game.deadline_at = now + timedelta(seconds=self._seconds(game, "day_start", 15))
+        else:
+            return False
         await session.commit()
         log.info(
             "mafia_phase_changed",
@@ -244,14 +261,16 @@ class MafiaGame(BaseGame):
             phase_seq=game.phase_seq,
             round_no=game.round_no,
         )
+        return True
 
     async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
-        await self._advance_phase(session, game)
+        await self._advance_phase(session, game, expected_phase_seq=game.phase_seq)
 
     async def maybe_advance_if_ready(self, session: AsyncSession, game: GameSession) -> bool:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
         if game is None or game.status != GameSessionStatus.RUNNING.value:
             return False
+        expected_phase_seq = game.phase_seq
         alive = list((await session.scalars(
             select(GamePlayer).where(GamePlayer.game_id == game.id, GamePlayer.status == "alive")
         )).all())
@@ -265,8 +284,11 @@ class MafiaGame(BaseGame):
                 )
             )).all())
             if actors and actors <= voted:
-                await self._advance_phase(session, game)
-                return True
+                return await self._advance_phase(
+                    session,
+                    game,
+                    expected_phase_seq=expected_phase_seq,
+                )
         elif game.phase == MafiaPhase.NIGHT_ACTIONS.value:
             required = {
                 player.user_telegram_id
@@ -281,8 +303,11 @@ class MafiaGame(BaseGame):
                 )
             )).all())
             if required and required <= acted:
-                await self._advance_phase(session, game)
-                return True
+                return await self._advance_phase(
+                    session,
+                    game,
+                    expected_phase_seq=expected_phase_seq,
+                )
         return False
 
     async def restore(self, session: AsyncSession, game: GameSession) -> None:
