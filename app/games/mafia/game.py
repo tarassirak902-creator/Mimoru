@@ -4,14 +4,18 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 import random
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GameAction, GamePlayer, GameSession
+from app.db.game_models import GameAction, GameGroupSettings, GamePlayer, GameSession
 from app.games.base import BaseGame
 from app.games.config import GameDefinition
 from app.games.enums import GameSessionStatus
 from app.games.mafia.resolution import finish_game, resolve_day_vote, resolve_night, winner
+
+
+log = structlog.get_logger()
 
 
 class MafiaPhase(StrEnum):
@@ -39,6 +43,14 @@ mafia_definition = GameDefinition(
 )
 
 
+def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 class MafiaGame(BaseGame):
     definition = mafia_definition
 
@@ -59,6 +71,12 @@ class MafiaGame(BaseGame):
         random.SystemRandom().shuffle(roles)
         return roles
 
+    @staticmethod
+    def _seconds(game: GameSession, key: str, default: int) -> int:
+        state = dict(game.state_json or {})
+        timers = dict(state.get("timers") or {})
+        return _bounded_int(timers.get(key), default, 3, 600)
+
     async def start(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
         if game is None:
@@ -66,6 +84,17 @@ class MafiaGame(BaseGame):
         players = await self._players(session, game)
         if len(players) < self.definition.min_players:
             raise ValueError("not enough players for mafia")
+        settings = await session.get(GameGroupSettings, game.group_id)
+        all_settings = dict(settings.settings_json or {}) if settings is not None else {}
+        mafia_settings = dict(all_settings.get("mafia") or {})
+        timers = {
+            "day_start": _bounded_int(mafia_settings.get("day_start_seconds"), 15, 3, 120),
+            "discussion": _bounded_int(mafia_settings.get("discussion_seconds"), 90, 15, 600),
+            "voting": _bounded_int(mafia_settings.get("voting_seconds"), 60, 15, 300),
+            "result": _bounded_int(mafia_settings.get("result_seconds"), 10, 3, 60),
+            "night_start": _bounded_int(mafia_settings.get("night_start_seconds"), 10, 3, 60),
+            "night_actions": _bounded_int(mafia_settings.get("night_seconds"), 60, 15, 300),
+        }
         roles = self._role_deck(len(players))
         for player, role in zip(players, roles, strict=True):
             player.role = role
@@ -78,15 +107,18 @@ class MafiaGame(BaseGame):
         game.round_no = 1
         game.state_json = {
             "day": 1,
-            "doctor_can_self_heal": True,
-            "doctor_can_heal_same_player_twice": False,
+            "doctor_can_self_heal": bool(mafia_settings.get("doctor_can_self_heal", True)),
+            "doctor_can_heal_same_player_twice": bool(mafia_settings.get("doctor_can_heal_same_player_twice", False)),
+            "afk_strikes_to_remove": _bounded_int(mafia_settings.get("afk_strikes_to_remove"), 2, 1, 5),
             "last_healed_user_id": None,
             "last_day_result": None,
             "last_night_result": None,
             "last_afk_removed": [],
+            "timers": timers,
         }
-        game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=15)
+        game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=timers["day_start"])
         await session.commit()
+        log.info("mafia_started", game_id=game.id, group_id=game.group_id, players=len(players))
 
     async def handle_action(
         self,
@@ -125,16 +157,19 @@ class MafiaGame(BaseGame):
             )
         )).all())
         removed: list[str] = []
+        threshold = _bounded_int((game.state_json or {}).get("afk_strikes_to_remove"), 2, 1, 5)
         for player in players:
             if player.user_telegram_id not in required or player.user_telegram_id in acted:
                 continue
             player.afk_count += 1
-            if player.afk_count >= 2:
+            if player.afk_count >= threshold:
                 player.status = "dead"
                 removed.append(player.display_name)
         state = dict(game.state_json or {})
         state["last_afk_removed"] = removed
         game.state_json = state
+        if removed:
+            log.info("mafia_afk_removed", game_id=game.id, phase=phase, count=len(removed))
 
     async def _advance_phase(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
@@ -145,39 +180,41 @@ class MafiaGame(BaseGame):
         if current == MafiaPhase.DAY_START.value:
             game.phase = MafiaPhase.DISCUSSION.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=90)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "discussion", 90))
         elif current == MafiaPhase.DISCUSSION.value:
             game.phase = MafiaPhase.DAY_VOTING.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=60)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "voting", 60))
         elif current == MafiaPhase.DAY_VOTING.value:
             await resolve_day_vote(session, game)
             await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
+                log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
                 return
             game.phase = MafiaPhase.VOTING_RESULT.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=10)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "result", 10))
         elif current == MafiaPhase.VOTING_RESULT.value:
             game.phase = MafiaPhase.NIGHT_START.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=10)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "night_start", 10))
         elif current == MafiaPhase.NIGHT_START.value:
             game.phase = MafiaPhase.NIGHT_ACTIONS.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=60)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "night_actions", 60))
         elif current == MafiaPhase.NIGHT_ACTIONS.value:
             await resolve_night(session, game)
             await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
                 await finish_game(session, game, winning_team)
+                log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
                 return
             game.phase = MafiaPhase.NIGHT_RESULT.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=10)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "result", 10))
         elif current == MafiaPhase.NIGHT_RESULT.value:
             game.round_no += 1
             state = dict(game.state_json or {})
@@ -186,8 +223,16 @@ class MafiaGame(BaseGame):
             game.state_json = state
             game.phase = MafiaPhase.DAY_START.value
             game.phase_seq += 1
-            game.deadline_at = now + timedelta(seconds=15)
+            game.deadline_at = now + timedelta(seconds=self._seconds(game, "day_start", 15))
         await session.commit()
+        log.info(
+            "mafia_phase_changed",
+            game_id=game.id,
+            from_phase=current,
+            to_phase=game.phase,
+            phase_seq=game.phase_seq,
+            round_no=game.round_no,
+        )
 
     async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
         await self._advance_phase(session, game)
@@ -238,10 +283,9 @@ class MafiaGame(BaseGame):
             return
         game.status = GameSessionStatus.RUNNING.value
         if game.deadline_at is None:
-            game.deadline_at = datetime.now(timezone.utc) + timedelta(
-                seconds=self.definition.default_timeout_seconds
-            )
+            game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=self.definition.default_timeout_seconds)
         await session.commit()
+        log.info("mafia_restored", game_id=game.id, phase=game.phase, phase_seq=game.phase_seq)
 
     async def sync_ui(self, bot, session: AsyncSession, game: GameSession) -> None:
         from app.games.mafia.presentation import sync_mafia_ui
