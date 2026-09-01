@@ -14,6 +14,7 @@ from app.games.mafia import handlers as mafia_handlers
 from app.games.quiz import handlers as quiz_handlers
 from app.games.roulette import handlers as roulette_handlers
 from app.games.spy import handlers as spy_handlers
+from app.games.words import handlers as words_handlers
 
 router = Router(name=__name__)
 _INCLUDED_CALLBACK_FAMILIES = ("gm", "fsfriendly", "fshfriendly")
@@ -25,6 +26,7 @@ router.include_router(roulette_handlers.router)
 router.include_router(crocodile_handlers.router)
 router.include_router(cards_handlers.router)
 router.include_router(arena_handlers.router)
+router.include_router(words_handlers.router)
 router.include_router(game_text_entry.router)
 router.include_router(game_settings_handlers.router)
 router.include_router(game_handlers.router)
