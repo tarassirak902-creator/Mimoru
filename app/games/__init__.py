@@ -3,6 +3,7 @@ from app.games.mafia import MafiaGame, mafia_definition
 from app.games.spy import SpyGame, spy_definition
 from app.games.quiz import QuizGame, quiz_definition
 from app.games.battleship import BattleshipGame, battleship_definition
+from app.games.roulette import RouletteGame, roulette_definition
 
 
 def register_builtin_games() -> None:
@@ -14,6 +15,8 @@ def register_builtin_games() -> None:
         game_registry.register(quiz_definition, QuizGame())
     if game_registry.get(battleship_definition.code) is None:
         game_registry.register(battleship_definition, BattleshipGame())
+    if game_registry.get(roulette_definition.code) is None:
+        game_registry.register(roulette_definition, RouletteGame())
 
 
 register_builtin_games()
