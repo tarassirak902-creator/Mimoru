@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.game_models import GameGroupSettings, GamePlayer, GameSession
 from app.db.models import Group
 from app.games.enums import ACTIVE_SESSION_STATUSES, GameSessionStatus
-from app.games.group_limits import effective_max_players
+from app.games.group_limits import effective_max_players, lobby_max_players
 from app.games.registry import GameRegistry, game_registry
 
 
@@ -86,6 +86,8 @@ class GameManager:
         if current is not None:
             raise GameConflictError(current.game_type)
 
+        settings = await session.get(GameGroupSettings, group.id)
+        max_players = effective_max_players(definition, settings)
         game = GameSession(
             group_id=group.id,
             game_type=definition.code,
@@ -95,7 +97,7 @@ class GameManager:
             round_no=0,
             creator_telegram_id=creator_telegram_id,
             exclusive_group_game=definition.exclusive_group_game,
-            state_json={},
+            state_json={"lobby_max_players": max_players},
         )
         session.add(game)
         try:
@@ -151,8 +153,7 @@ class GameManager:
             raise GamePlayerError("lobby is closed")
 
         definition = self.registry.require(game.game_type)
-        settings = await session.get(GameGroupSettings, game.group_id)
-        max_players = effective_max_players(definition, settings)
+        max_players = lobby_max_players(game, definition)
         all_players = list(
             (
                 await session.scalars(
