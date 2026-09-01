@@ -13,19 +13,13 @@ from app.services.access import can_manage_group
 router = Router(name=__name__)
 
 
-async def _active_group(
-    session: AsyncSession,
-    chat_id: int,
-    *,
-    for_update: bool = False,
-) -> Group | None:
-    query = select(Group).where(
-        Group.telegram_chat_id == chat_id,
-        Group.is_active.is_(True),
+async def _active_group(session: AsyncSession, chat_id: int) -> Group | None:
+    return await session.scalar(
+        select(Group).where(
+            Group.telegram_chat_id == chat_id,
+            Group.is_active.is_(True),
+        )
     )
-    if for_update:
-        query = query.with_for_update()
-    return await session.scalar(query)
 
 
 def _setting_values(settings: GameGroupSettings | None) -> tuple[bool, bool, str]:
@@ -53,7 +47,11 @@ def settings_text(settings: GameGroupSettings | None) -> str:
 
 def settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardMarkup:
     enabled, rating_enabled, creator_policy = _setting_values(settings)
-    creator_text = "👤 Запуск: создатель" if creator_policy == "lobby_creator" else "👥 Запуск: участники"
+    creator_text = (
+        "👤 Запуск: создатель"
+        if creator_policy == "lobby_creator"
+        else "👥 Запуск: участники"
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"🎮 Игры: {'ON' if enabled else 'OFF'}",
@@ -72,13 +70,11 @@ async def _managed_group(
     callback: CallbackQuery,
     bot: Bot,
     session: AsyncSession,
-    *,
-    for_update: bool,
 ) -> Group | None:
     if callback.message is None:
         await callback.answer("Игровая панель недоступна.", show_alert=True)
         return None
-    group = await _active_group(session, callback.message.chat.id, for_update=for_update)
+    group = await _active_group(session, callback.message.chat.id)
     if group is None:
         await callback.answer("Группа больше не подключена к Mimoru.", show_alert=True)
         return None
@@ -99,7 +95,7 @@ async def _render(callback: CallbackQuery, settings: GameGroupSettings | None) -
 
 @router.callback_query(F.data == "gm:settings")
 async def game_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
-    group = await _managed_group(callback, bot, session, for_update=False)
+    group = await _managed_group(callback, bot, session)
     if group is None:
         return
     settings = await session.get(GameGroupSettings, group.id)
@@ -109,13 +105,23 @@ async def game_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession
 
 @router.callback_query(F.data.regexp(r"^gm:cfg:(enabled|rating|creator)$"))
 async def game_settings_toggle(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
-    group = await _managed_group(callback, bot, session, for_update=True)
+    group = await _managed_group(callback, bot, session)
     if group is None:
         return
-    settings = await session.get(GameGroupSettings, group.id)
+
+    locked_group = await session.scalar(
+        select(Group)
+        .where(Group.id == group.id, Group.is_active.is_(True))
+        .with_for_update()
+    )
+    if locked_group is None:
+        await callback.answer("Группа больше не подключена к Mimoru.", show_alert=True)
+        return
+
+    settings = await session.get(GameGroupSettings, locked_group.id)
     if settings is None:
         settings = GameGroupSettings(
-            group_id=group.id,
+            group_id=locked_group.id,
             enabled=True,
             allowed_games=[],
             creator_policy="lobby_creator",
