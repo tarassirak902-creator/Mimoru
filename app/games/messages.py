@@ -16,6 +16,7 @@ from app.games.locks import advisory_xact_lock
 
 log = structlog.get_logger()
 _GAME_PHASE_MESSAGE_LOCK_NAMESPACE = 4_676_945
+_GAME_MESSAGE_RETIRE_LOCK_NAMESPACE = 4_676_947
 
 
 async def register_game_message(
@@ -64,22 +65,31 @@ async def retire_game_message(
     record: GameMessage,
     replacement_text: str | None = None,
 ) -> None:
-    if not record.active:
+    await advisory_xact_lock(
+        session,
+        namespace=_GAME_MESSAGE_RETIRE_LOCK_NAMESPACE,
+        key=record.id,
+    )
+    current = await session.scalar(
+        select(GameMessage).where(GameMessage.id == record.id).with_for_update()
+    )
+    if current is None or not current.active:
+        await session.commit()
         return
     try:
         if replacement_text is not None:
             await bot.edit_message_text(
-                chat_id=record.chat_id,
-                message_id=record.message_id,
+                chat_id=current.chat_id,
+                message_id=current.message_id,
                 text=replacement_text,
                 reply_markup=None,
             )
         else:
-            await bot.delete_message(record.chat_id, record.message_id)
+            await bot.delete_message(current.chat_id, current.message_id)
     except TelegramBadRequest as error:
-        text = str(error).casefold()
+        error_text = str(error).casefold()
         if not any(
-            marker in text
+            marker in error_text
             for marker in (
                 "message to delete not found",
                 "message can't be deleted",
@@ -89,19 +99,19 @@ async def retire_game_message(
         ):
             log.info(
                 "game_message_retire_failed",
-                game_id=record.game_id,
-                message_id=record.message_id,
+                game_id=current.game_id,
+                message_id=current.message_id,
                 error=str(error),
             )
     except TelegramForbiddenError as error:
         log.info(
             "game_message_retire_forbidden",
-            game_id=record.game_id,
-            message_id=record.message_id,
+            game_id=current.game_id,
+            message_id=current.message_id,
             error=str(error),
         )
-    record.active = False
-    record.retired_at = datetime.now(timezone.utc)
+    current.active = False
+    current.retired_at = datetime.now(timezone.utc)
     await session.commit()
 
 
@@ -120,14 +130,19 @@ async def retire_active_messages(
     if kind is not None:
         query = query.where(GameMessage.kind == kind)
     records = list((await session.scalars(query.order_by(GameMessage.id))).all())
+    retired = 0
     for record in records:
+        was_active = record.active
         await retire_game_message(
             bot,
             session,
             record=record,
             replacement_text=replacement_text,
         )
-    return len(records)
+        await session.refresh(record)
+        if was_active and not record.active:
+            retired += 1
+    return retired
 
 
 async def upsert_phase_message(
