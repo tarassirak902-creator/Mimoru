@@ -10,6 +10,7 @@ from app.games.arena import handlers as arena_handlers
 from app.games.battleship import handlers as battleship_handlers
 from app.games.cards import handlers as cards_handlers
 from app.games.crocodile import handlers as crocodile_handlers
+from app.games.detective import handlers as detective_handlers
 from app.games.mafia import handlers as mafia_handlers
 from app.games.quiz import handlers as quiz_handlers
 from app.games.roulette import handlers as roulette_handlers
@@ -27,6 +28,7 @@ router.include_router(crocodile_handlers.router)
 router.include_router(cards_handlers.router)
 router.include_router(arena_handlers.router)
 router.include_router(words_handlers.router)
+router.include_router(detective_handlers.router)
 router.include_router(game_text_entry.router)
 router.include_router(game_settings_handlers.router)
 router.include_router(game_handlers.router)
