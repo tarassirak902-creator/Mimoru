@@ -60,9 +60,10 @@ def _game_codes() -> list[str]:
 
 def _effective_allowed_games(settings: GameGroupSettings | None) -> set[str]:
     all_codes = set(_game_codes())
-    if settings is None or not settings.allowed_games:
+    configured = list(getattr(settings, "allowed_games", []) or []) if settings is not None else []
+    if not configured:
         return all_codes
-    return {code for code in settings.allowed_games if code in all_codes}
+    return {code for code in configured if code in all_codes}
 
 
 def _mafia_dict(settings: GameGroupSettings | None) -> dict:
