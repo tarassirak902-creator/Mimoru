@@ -272,10 +272,8 @@ class RouletteGame(BaseGame):
         )
         if player is not None:
             player.afk_count += 1
-        await session.commit()
-        fresh = await session.get(GameSession, game.id)
-        if fresh is not None:
-            await self.trigger(session, fresh, actor_telegram_id=current)
+        await session.flush()
+        await self.trigger(session, game, actor_telegram_id=current)
 
     async def restore(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(
