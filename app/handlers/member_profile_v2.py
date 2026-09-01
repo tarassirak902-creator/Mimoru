@@ -47,7 +47,7 @@ def _profile_keyboard(group_id: int, target_id: int, requester_id: int, active: 
         inline_keyboard=[
             [button("profile", "👤 Профиль"), button("history", "⚖️ История")],
             [button("games", "🎮 Игры"), button("rp", rp_label)],
-            [button("close", "✖️ Закрыть")],
+            [button("close", "❌ Закрыть")],
         ]
     )
 
@@ -217,28 +217,46 @@ async def _profile_text(
     elif member is not None and member.is_present:
         status = "🕵️ Состоит в чате"
     else:
-        status = "⚪ Не состоит в чате"
+        status = "🚪 Покинул чат"
 
+    day_count, week_count, month_count, all_count, deleted = await _message_periods(
+        session, group.id, user_id
+    )
     marriage = await _marriage_line(session, group.id, user_id)
-    total_messages = member.messages_count if member is not None else 0
-    joined = _membership_age(member.joined_at if member is not None else None)
-    last_seen = _ago_text(member.last_seen_at if member is not None else None)
+    last_active = _ago_text(member.last_seen_at if member is not None else None)
+    joined_date = member.joined_at if member is not None else None
+    joined = "неизвестно" if joined_date is None else joined_date.astimezone(timezone.utc).strftime("%d.%m.%Y")
+    joined_age = _membership_age(joined_date)
+
     return (
-        f"👤 {user_name}\n\n"
+        f"👤 Это пользователь {user_name}\n"
         f"{status}\n"
-        f"🏷 Роль: {role}\n"
-        f"💬 Сообщения: {_plural_messages(total_messages)}\n"
-        f"📅 В группе: {joined}\n"
-        f"🕒 Последняя активность: {last_seen}\n"
-        f"{marriage}"
+        f"🧠 Роль: {role}\n"
+        f"{marriage}\n"
+        f"⌛ Последний актив: {last_active}\n\n"
+        f"💬 Сообщения: {all_count}\n"
+        "день | неделя | месяц | всего\n"
+        f"{day_count} | {week_count} | {month_count} | {all_count}\n\n"
+        f"🗑 Удалено: {_plural_messages(deleted)}\n"
+        f"📅 В группе с: {joined} ({joined_age})"
     )
 
 
 async def _history_text(session: AsyncSession, group: Group, user_id: int) -> str:
-    user_name = await _user_name(session, user_id)
-    warnings = int(
+    label = await _user_name(session, user_id)
+    active_warnings = int(
         await session.scalar(
-            select(func.count(Warning.id)).where(
+            select(func.count()).select_from(Warning).where(
+                Warning.group_id == group.id,
+                Warning.user_telegram_id == user_id,
+                Warning.active.is_(True),
+            )
+        )
+        or 0
+    )
+    all_warnings = int(
+        await session.scalar(
+            select(func.count()).select_from(Warning).where(
                 Warning.group_id == group.id,
                 Warning.user_telegram_id == user_id,
             )
@@ -247,27 +265,30 @@ async def _history_text(session: AsyncSession, group: Group, user_id: int) -> st
     )
     complaints = int(
         await session.scalar(
-            select(func.count(Complaint.id)).where(
+            select(func.count()).select_from(Complaint).where(
                 Complaint.group_id == group.id,
                 Complaint.target_telegram_id == user_id,
             )
         )
         or 0
     )
-    punishments = int(
-        await session.scalar(
-            select(func.count(Punishment.id)).where(
-                Punishment.group_id == group.id,
-                Punishment.user_telegram_id == user_id,
-            )
-        )
-        or 0
-    )
+    mute = await _active_punishment(session, group.id, user_id, "mute")
+    ban = await _active_punishment(session, group.id, user_id, "ban")
+
+    def punishment_text(row: Punishment | None) -> str:
+        if row is None:
+            return "нет"
+        if row.ends_at is None:
+            return "да, без срока"
+        return f"да, до {row.ends_at.astimezone(timezone.utc).strftime('%d.%m.%Y %H:%M UTC')}"
+
     return (
-        f"⚖️ История — {user_name}\n\n"
-        f"Предупреждения: {warnings}\n"
-        f"Жалобы: {complaints}\n"
-        f"Наказания: {punishments}"
+        f"⚖️ ИСТОРИЯ — {label}\n\n"
+        f"⚠️ Предупреждения: {active_warnings} активных / {all_warnings} всего\n"
+        f"🔇 Мут: {punishment_text(mute)}\n"
+        f"🚫 Бан: {punishment_text(ban)}\n"
+        f"🚨 Жалобы: {complaints}\n\n"
+        "Статистика относится только к этой группе."
     )
 
 
@@ -276,53 +297,54 @@ async def _games_text(session: AsyncSession, group: Group, user_id: int) -> str:
         session,
         group_id=group.id,
         user_id=user_id,
-        user_label=await _user_name(session, user_id),
+        label=await _user_name(session, user_id),
     )
 
 
 async def _rp_text(session: AsyncSession, group: Group, user_id: int) -> str:
-    user_name = await _user_name(session, user_id)
-    rows = (
-        await session.execute(
-            select(GameEvent.action_key, func.count(GameEvent.id))
-            .where(
-                GameEvent.group_id == group.id,
-                GameEvent.actor_telegram_id == user_id,
-                GameEvent.event_type.in_(RP_EVENT_TYPES),
-            )
-            .group_by(GameEvent.action_key)
-            .order_by(func.count(GameEvent.id).desc(), GameEvent.action_key.asc())
-            .limit(10)
-        )
-    ).all()
+    label = await _user_name(session, user_id)
+    rp_filter = (
+        GameEvent.group_id == group.id,
+        GameEvent.actor_telegram_id == user_id,
+        GameEvent.event_type.in_(RP_EVENT_TYPES),
+        or_(GameEvent.outcome.is_(None), GameEvent.outcome != "bot_wins"),
+    )
     total = int(
         await session.scalar(
-            select(func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.actor_telegram_id == user_id,
-                GameEvent.event_type.in_(RP_EVENT_TYPES),
-            )
+            select(func.count(GameEvent.id)).where(*rp_filter)
         )
         or 0
     )
-    lines = [f"🎭 РП — {user_name}", "", f"Всего использовано РП-действий: {total}"]
-    if not rows:
-        lines.extend(["", "РП-действий в этой группе пока нет."])
+    favorite_rows = (
+        await session.execute(
+            select(GameEvent.action, func.count(GameEvent.id))
+            .where(*rp_filter, GameEvent.action.is_not(None))
+            .group_by(GameEvent.action)
+            .order_by(func.count(GameEvent.id).desc(), GameEvent.action)
+            .limit(10)
+        )
+    ).all()
+
+    lines = [
+        f"🎭 РП — {label}",
+        "",
+        f"Всего использовано РП-действий: {total}",
+        "",
+        "Чаще всего используешь:",
+    ]
+    if favorite_rows:
+        lines.extend(
+            f"{index}. {action} — {int(count)}"
+            for index, (action, count) in enumerate(favorite_rows, start=1)
+        )
     else:
-        lines.extend(["", "Чаще всего используешь:"])
-        for index, (action_key, count) in enumerate(rows, start=1):
-            lines.append(f"{index}. {action_key} — {int(count)}")
+        lines.append("• пока нет РП-действий")
     lines.extend(["", "Здесь учитываются только РП/развлекательные действия в этой группе."])
     return "\n".join(lines)
 
 
 async def _view_text(
-    session: AsyncSession,
-    group: Group,
-    user_id: int,
-    view: str,
-    *,
-    bot_id: int,
+    session: AsyncSession, group: Group, user_id: int, view: str, *, bot_id: int
 ) -> str:
     if view == "history":
         return await _history_text(session, group, user_id)
@@ -334,99 +356,86 @@ async def _view_text(
 
 
 async def _send_profile(
-    message: Message,
-    session: AsyncSession,
-    *,
-    group: Group,
-    target_id: int,
-    requester_id: int,
-    bot_id: int,
+    message: Message, bot: Bot, session: AsyncSession, group: Group, target_id: int
 ) -> None:
-    text = await _profile_text(session, group, target_id, bot_id=bot_id)
-    await message.answer(
+    if message.from_user is None:
+        return
+    text = await _profile_text(session, group, target_id, bot_id=bot.id)
+    await message.reply(
         text,
-        reply_markup=_profile_keyboard(group.id, target_id, requester_id, "profile"),
+        reply_markup=_profile_keyboard(group.id, target_id, message.from_user.id, "profile"),
     )
 
 
-@router.message(F.chat.type.in_(GROUP_TYPES), F.text)
-async def member_profile_message(message: Message, session: AsyncSession, bot: Bot) -> None:
-    if message.from_user is None or not message.text:
+@router.message(F.chat.type.in_(GROUP_TYPES), F.reply_to_message, F.text.casefold().in_(LOOKUP_ALIASES))
+async def lookup_profile(message: Message, bot: Bot, session: AsyncSession) -> None:
+    if message.reply_to_message is None or message.reply_to_message.from_user is None:
         return
-    text = " ".join(message.text.casefold().split())
-    if text not in SELF_PROFILE_ALIASES and text not in LOOKUP_ALIASES:
-        return
-
     group = await _active_group(session, message.chat.id)
     if group is None:
         return
+    target = message.reply_to_message.from_user
+    await upsert_user(session, target)
+    await _send_profile(message, bot, session, group, target.id)
 
-    await upsert_user(
-        session,
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
-        last_name=message.from_user.last_name,
-    )
-    await session.commit()
 
-    target_id = message.from_user.id
-    if message.reply_to_message is not None and message.reply_to_message.from_user is not None:
-        target_id = message.reply_to_message.from_user.id
-    elif text in LOOKUP_ALIASES and text not in SELF_PROFILE_ALIASES:
+@router.message(F.chat.type.in_(GROUP_TYPES), F.text.casefold().in_(SELF_PROFILE_ALIASES))
+async def own_profile(message: Message, bot: Bot, session: AsyncSession) -> None:
+    if message.from_user is None:
         return
-
-    me = await bot.get_me()
-    await _send_profile(
-        message,
-        session,
-        group=group,
-        target_id=target_id,
-        requester_id=message.from_user.id,
-        bot_id=me.id,
-    )
+    group = await _active_group(session, message.chat.id)
+    if group is None:
+        return
+    await _send_profile(message, bot, session, group, message.from_user.id)
 
 
-@router.callback_query(F.data.startswith(f"{PROFILE_CALLBACK_PREFIX}:"))
-async def member_profile_callback(callback: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
-    if callback.from_user is None or callback.message is None or not callback.data:
+@router.callback_query(F.data.startswith("member_profile_v2:"))
+async def profile_tab(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+    if callback.data is None or callback.message is None:
+        await callback.answer()
         return
     parts = callback.data.split(":")
     if len(parts) != 5:
-        await callback.answer("Кнопка устарела.", show_alert=True)
+        await callback.answer("Карточка устарела. Откройте её заново.", show_alert=True)
         return
+    _, raw_group_id, raw_target_id, raw_requester_id, view = parts
     try:
-        group_id = int(parts[1])
-        target_id = int(parts[2])
-        requester_id = int(parts[3])
+        group_id = int(raw_group_id)
+        target_id = int(raw_target_id)
+        requester_id = int(raw_requester_id)
     except ValueError:
-        await callback.answer("Кнопка устарела.", show_alert=True)
+        await callback.answer("Карточка устарела. Откройте её заново.", show_alert=True)
         return
-    view = parts[4]
     if callback.from_user.id != requester_id:
-        await callback.answer("Эта карточка открыта другим участником.", show_alert=True)
+        await callback.answer(
+            "Не для тебя мать кнопки прислала, отдыхай! Выпей лучше валерьянки и узбогойся...",
+            show_alert=True,
+        )
         return
+    if view not in {"profile", "history", "games", "rp", "close"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    group = await session.scalar(select(Group).where(Group.id == group_id, Group.is_active.is_(True)))
+    if group is None or callback.message.chat.id != group.telegram_chat_id:
+        await callback.answer("Эта карточка больше недоступна.", show_alert=True)
+        return
+
     if view == "close":
         try:
             await callback.message.delete()
         except TelegramBadRequest:
-            await callback.answer("Не удалось закрыть карточку.", show_alert=True)
+            await callback.answer("Не удалось удалить карточку.", show_alert=True)
             return
         await callback.answer()
         return
 
-    group = await session.get(Group, group_id)
-    if group is None or not group.is_active:
-        await callback.answer("Группа больше не активна.", show_alert=True)
-        return
-    me = await bot.get_me()
-    text = await _view_text(session, group, target_id, view, bot_id=me.id)
+    text = await _view_text(session, group, target_id, view, bot_id=bot.id)
     try:
         await callback.message.edit_text(
             text,
-            reply_markup=_profile_keyboard(group_id, target_id, requester_id, view),
+            reply_markup=_profile_keyboard(group.id, target_id, requester_id, view),
         )
-    except TelegramBadRequest as error:
-        if "message is not modified" not in str(error).casefold():
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc).casefold():
             raise
     await callback.answer()
