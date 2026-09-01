@@ -91,7 +91,8 @@ def test_game_manager_serializes_full_lobby_lifecycle() -> None:
 
     assert "get_game(session, game_id=game_id, for_update=True)" in join
     assert ".with_for_update()" in join
-    assert "definition.max_players" in join
+    assert "max_players = lobby_max_players(game, definition)" in join
+    assert "len(joined) >= max_players" in join
     assert "existing.status = \"joined\"" in join
     assert "except IntegrityError" in join
 

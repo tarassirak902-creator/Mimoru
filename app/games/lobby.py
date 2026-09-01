@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GameMessage, GameSession
 from app.db.models import Group
+from app.games.group_limits import lobby_max_players
 from app.games.manager import GameManager
 from app.games.registry import GameRegistry, game_registry
 
@@ -51,8 +52,9 @@ def lobby_markup(game_id: int, game_type: str) -> InlineKeyboardMarkup:
 async def lobby_text(session: AsyncSession, *, game: GameSession, manager: GameManager, registry: GameRegistry | None = None) -> str:
     registry = registry or game_registry
     definition = registry.require(game.game_type)
+    max_players = lobby_max_players(game, definition)
     players = await manager.list_players(session, game_id=game.id)
-    lines = [definition.title.upper(), "", f"👥 Игроки: {len(players)}/{definition.max_players}", ""]
+    lines = [definition.title.upper(), "", f"👥 Игроки: {len(players)}/{max_players}", ""]
     if players:
         for index, player in enumerate(players, start=1):
             name = player.display_name or f"Игрок {player.user_telegram_id}"

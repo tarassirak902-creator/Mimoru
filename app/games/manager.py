@@ -6,9 +6,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GamePlayer, GameSession
+from app.db.game_models import GameGroupSettings, GamePlayer, GameSession
 from app.db.models import Group
 from app.games.enums import ACTIVE_SESSION_STATUSES, GameSessionStatus
+from app.games.group_limits import effective_max_players, lobby_max_players
 from app.games.registry import GameRegistry, game_registry
 
 
@@ -85,6 +86,8 @@ class GameManager:
         if current is not None:
             raise GameConflictError(current.game_type)
 
+        settings = await session.get(GameGroupSettings, group.id)
+        max_players = effective_max_players(definition, settings)
         game = GameSession(
             group_id=group.id,
             game_type=definition.code,
@@ -94,7 +97,7 @@ class GameManager:
             round_no=0,
             creator_telegram_id=creator_telegram_id,
             exclusive_group_game=definition.exclusive_group_game,
-            state_json={},
+            state_json={"lobby_max_players": max_players},
         )
         session.add(game)
         try:
@@ -150,6 +153,7 @@ class GameManager:
             raise GamePlayerError("lobby is closed")
 
         definition = self.registry.require(game.game_type)
+        max_players = lobby_max_players(game, definition)
         all_players = list(
             (
                 await session.scalars(
@@ -167,7 +171,7 @@ class GameManager:
         )
         if existing is not None and existing.status == "joined":
             return existing
-        if len(joined) >= definition.max_players:
+        if len(joined) >= max_players:
             raise GamePlayerError("lobby is full")
         if existing is not None:
             existing.status = "joined"
@@ -243,9 +247,6 @@ class GameManager:
         if len(players) < definition.min_players:
             raise GamePlayerError("not enough players")
 
-        # A lobby leaver remains reusable while the lobby is open so they can join again.
-        # Once the game starts, however, those rows are not participants and must not be
-        # visible to engines that intentionally load every GamePlayer row for the session.
         await session.execute(
             delete(GamePlayer).where(
                 GamePlayer.game_id == game.id,
