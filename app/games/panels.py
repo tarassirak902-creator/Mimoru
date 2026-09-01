@@ -30,7 +30,10 @@ def panel_markup(*, active_game: GameSession | None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏆 Рейтинг", callback_data="gm:rating"),
             InlineKeyboardButton(text="👤 Мой профиль", callback_data="gm:profile"),
         ],
-        [InlineKeyboardButton(text="ℹ️ Правила", callback_data="gm:rules:all")],
+        [
+            InlineKeyboardButton(text="ℹ️ Правила", callback_data="gm:rules:all"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="gm:settings"),
+        ],
     ])
 
 
