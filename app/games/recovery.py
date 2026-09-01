@@ -10,12 +10,14 @@ from app.db.game_models import GameSession
 from app.db.models import Group
 from app.db.session import SessionFactory
 from app.games.enums import GameSessionStatus
-from app.games.lobby import close_lobby_message
+from app.games.lobby import close_lobby_message, ensure_lobby_message
+from app.games.manager import GameManager
 from app.games.panels import ensure_game_panel
 from app.games.registry import game_registry
 
 
 log = structlog.get_logger()
+manager = GameManager()
 
 
 async def _sync_engine_ui(bot: Bot | None, engine, session, game: GameSession) -> None:
@@ -34,7 +36,11 @@ async def recover_active_games(bot: Bot | None = None) -> None:
     async with SessionFactory() as session:
         ids = list((await session.scalars(
             select(GameSession.id).where(
-                GameSession.status.in_((GameSessionStatus.RUNNING.value, GameSessionStatus.RECOVERING.value))
+                GameSession.status.in_((
+                    GameSessionStatus.LOBBY.value,
+                    GameSessionStatus.RUNNING.value,
+                    GameSessionStatus.RECOVERING.value,
+                ))
             )
         )).all())
 
@@ -42,6 +48,7 @@ async def recover_active_games(bot: Bot | None = None) -> None:
         async with SessionFactory() as session:
             game = await session.scalar(select(GameSession).where(GameSession.id == game_id).with_for_update())
             if game is None or game.status not in {
+                GameSessionStatus.LOBBY.value,
                 GameSessionStatus.RUNNING.value,
                 GameSessionStatus.RECOVERING.value,
             }:
@@ -54,6 +61,22 @@ async def recover_active_games(bot: Bot | None = None) -> None:
                 await session.commit()
                 log.error("game_recovery_engine_missing", game_id=game.id, game_type=game.game_type)
                 continue
+
+            if game.status == GameSessionStatus.LOBBY.value:
+                if bot is not None:
+                    group = await session.get(Group, game.group_id)
+                    if group is not None and group.is_active:
+                        await ensure_lobby_message(
+                            bot,
+                            session,
+                            group=group,
+                            game=game,
+                            manager=manager,
+                        )
+                        await ensure_game_panel(bot, session, group=group, pin=False)
+                log.info("game_lobby_recovered", game_id=game.id, game_type=game.game_type)
+                continue
+
             try:
                 if game.phase in {"starting", "recovering"}:
                     await entry.engine.start(session, game)
@@ -147,9 +170,6 @@ async def process_game_timeouts(bot: Bot | None = None) -> None:
             try:
                 await entry.engine.handle_timeout(session, game)
             except Exception:
-                # Timeout handlers are allowed to mutate several rows before their final
-                # commit. If anything fails, discard all partial mutations first; otherwise
-                # the RECOVERING commit could accidentally persist half of a phase change.
                 await session.rollback()
                 game = await session.scalar(
                     select(GameSession).where(GameSession.id == game_id).with_for_update()
