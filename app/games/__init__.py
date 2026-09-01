@@ -6,23 +6,17 @@ from app.games.battleship import BattleshipGame, battleship_definition
 from app.games.roulette import RouletteGame, roulette_definition
 from app.games.crocodile import CrocodileGame, crocodile_definition
 from app.games.cards import CardsGame, cards_definition
+from app.games.arena import ArenaGame, arena_definition
 
 
 def register_builtin_games() -> None:
-    if game_registry.get(mafia_definition.code) is None:
-        game_registry.register(mafia_definition, MafiaGame())
-    if game_registry.get(spy_definition.code) is None:
-        game_registry.register(spy_definition, SpyGame())
-    if game_registry.get(quiz_definition.code) is None:
-        game_registry.register(quiz_definition, QuizGame())
-    if game_registry.get(battleship_definition.code) is None:
-        game_registry.register(battleship_definition, BattleshipGame())
-    if game_registry.get(roulette_definition.code) is None:
-        game_registry.register(roulette_definition, RouletteGame())
-    if game_registry.get(crocodile_definition.code) is None:
-        game_registry.register(crocodile_definition, CrocodileGame())
-    if game_registry.get(cards_definition.code) is None:
-        game_registry.register(cards_definition, CardsGame())
+    for definition, engine in (
+        (mafia_definition, MafiaGame()), (spy_definition, SpyGame()), (quiz_definition, QuizGame()),
+        (battleship_definition, BattleshipGame()), (roulette_definition, RouletteGame()),
+        (crocodile_definition, CrocodileGame()), (cards_definition, CardsGame()), (arena_definition, ArenaGame()),
+    ):
+        if game_registry.get(definition.code) is None:
+            game_registry.register(definition, engine)
 
 
 register_builtin_games()
