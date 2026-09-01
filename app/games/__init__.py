@@ -8,6 +8,7 @@ from app.games.crocodile import CrocodileGame, crocodile_definition
 from app.games.cards import CardsGame, cards_definition
 from app.games.arena import ArenaGame, arena_definition
 from app.games.words import WordsGame, words_definition
+from app.games.detective import DetectiveGame, detective_definition
 
 
 def register_builtin_games() -> None:
@@ -29,6 +30,8 @@ def register_builtin_games() -> None:
         game_registry.register(arena_definition, ArenaGame())
     if game_registry.get(words_definition.code) is None:
         game_registry.register(words_definition, WordsGame())
+    if game_registry.get(detective_definition.code) is None:
+        game_registry.register(detective_definition, DetectiveGame())
 
 
 register_builtin_games()
