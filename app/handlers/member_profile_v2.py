@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.fun_models import GameEvent, GroupMarriage
 from app.db.models import Complaint, DailyStat, Group, GroupMember, Punishment, User, Warning
 from app.db.rank_models import RankAssignment
+from app.games.stat_views import render_member_game_stats
 from app.services.public_identity import public_user_token
 from app.services.ranks import RANK_LABELS
 from app.services.repositories import upsert_user
@@ -19,6 +20,7 @@ from app.services.repositories import upsert_user
 router = Router(name=__name__)
 GROUP_TYPES = {"group", "supergroup"}
 PROFILE_CALLBACK_PREFIX = "member_profile_v2"
+RP_EVENT_TYPES = ("action", "entertainment_action", "relationship_action")
 
 SELF_PROFILE_ALIASES = {
     "моё досье", "мое досье", "личное дело", "моя статистика", "мой профиль", "моя история",
@@ -40,10 +42,13 @@ def _profile_keyboard(group_id: int, target_id: int, requester_id: int, active: 
             callback_data=f"{PROFILE_CALLBACK_PREFIX}:{group_id}:{target_id}:{requester_id}:{view}",
         )
 
+    rp_label = "🎭 Мои РП" if target_id == requester_id else "🎭 РП"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [button("profile", "👤 Профиль")],
             [button("history", "⚖️ История"), button("games", "🎮 Игры")],
+            [button("rp", rp_label)],
+            [button("close", "❌ Закрыть")],
         ]
     )
 
@@ -289,86 +294,53 @@ async def _history_text(session: AsyncSession, group: Group, user_id: int) -> st
 
 
 async def _games_text(session: AsyncSession, group: Group, user_id: int) -> str:
+    return await render_member_game_stats(
+        session,
+        group_id=group.id,
+        user_id=user_id,
+        label=await _user_name(session, user_id),
+    )
+
+
+async def _rp_text(session: AsyncSession, group: Group, user_id: int) -> str:
     label = await _user_name(session, user_id)
-    made = int(
-        await session.scalar(
-            select(func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.event_type == "action",
-                GameEvent.actor_telegram_id == user_id,
-                GameEvent.outcome != "bot_wins",
-            )
-        )
-        or 0
+    rp_filter = (
+        GameEvent.group_id == group.id,
+        GameEvent.actor_telegram_id == user_id,
+        GameEvent.event_type.in_(RP_EVENT_TYPES),
+        or_(GameEvent.outcome.is_(None), GameEvent.outcome != "bot_wins"),
     )
-    received = int(
+    total = int(
         await session.scalar(
-            select(func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.event_type == "action",
-                GameEvent.target_telegram_id == user_id,
-                GameEvent.outcome != "bot_wins",
-            )
-        )
-        or 0
-    )
-    accepted_proposals = int(
-        await session.scalar(
-            select(func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.event_type == "proposal",
-                GameEvent.target_telegram_id == user_id,
-                GameEvent.outcome == "accepted",
-            )
-        )
-        or 0
-    )
-    marriages = int(
-        await session.scalar(
-            select(func.count(GroupMarriage.id)).where(
-                GroupMarriage.group_id == group.id,
-                or_(GroupMarriage.user1_telegram_id == user_id, GroupMarriage.user2_telegram_id == user_id),
-            )
-        )
-        or 0
-    )
-    bot_attacks = int(
-        await session.scalar(
-            select(func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.actor_telegram_id == user_id,
-                or_(GameEvent.event_type == "bot_attack", GameEvent.outcome == "bot_wins"),
-            )
+            select(func.count(GameEvent.id)).where(*rp_filter)
         )
         or 0
     )
     favorite_rows = (
         await session.execute(
-            select(GameEvent.action, func.count(GameEvent.id)).where(
-                GameEvent.group_id == group.id,
-                GameEvent.event_type == "action",
-                GameEvent.actor_telegram_id == user_id,
-                GameEvent.outcome != "bot_wins",
-            ).group_by(GameEvent.action).order_by(func.count(GameEvent.id).desc(), GameEvent.action).limit(5)
+            select(GameEvent.action, func.count(GameEvent.id))
+            .where(*rp_filter, GameEvent.action.is_not(None))
+            .group_by(GameEvent.action)
+            .order_by(func.count(GameEvent.id).desc(), GameEvent.action)
+            .limit(10)
         )
     ).all()
 
     lines = [
-        f"🎮 Игровая статистика — {label}",
+        f"🎭 РП — {label}",
         "",
-        f"🎭 Действий совершено: {made}",
-        f"🎯 Действий получено: {received}",
-        f"💌 Принятых предложений: {accepted_proposals}",
-        f"💍 Браков за всё время: {marriages}",
-        f"🤖 Нападений на Mimoru: {bot_attacks}",
+        f"Всего использовано РП-действий: {total}",
         "",
-        "❤️ Любимые действия:",
+        "Чаще всего используешь:",
     ]
     if favorite_rows:
-        lines.extend(f"• {action} — {count}" for action, count in favorite_rows)
+        lines.extend(
+            f"{index}. {action} — {int(count)}"
+            for index, (action, count) in enumerate(favorite_rows, start=1)
+        )
     else:
-        lines.append("• пока нет")
-    lines += ["", "Статистика относится только к этой группе."]
+        lines.append("• пока нет РП-действий")
+    lines.extend(["", "Здесь учитываются только РП/развлекательные действия в этой группе."])
     return "\n".join(lines)
 
 
@@ -379,6 +351,8 @@ async def _view_text(
         return await _history_text(session, group, user_id)
     if view == "games":
         return await _games_text(session, group, user_id)
+    if view == "rp":
+        return await _rp_text(session, group, user_id)
     return await _profile_text(session, group, user_id, bot_id=bot_id)
 
 
@@ -439,12 +413,21 @@ async def profile_tab(callback: CallbackQuery, bot: Bot, session: AsyncSession) 
             show_alert=True,
         )
         return
-    if view not in {"profile", "history", "games"}:
+    if view not in {"profile", "history", "games", "rp", "close"}:
         await callback.answer("Неизвестный раздел.", show_alert=True)
         return
     group = await session.scalar(select(Group).where(Group.id == group_id, Group.is_active.is_(True)))
     if group is None or callback.message.chat.id != group.telegram_chat_id:
         await callback.answer("Эта карточка больше недоступна.", show_alert=True)
+        return
+
+    if view == "close":
+        try:
+            await callback.message.delete()
+        except TelegramBadRequest:
+            await callback.answer("Не удалось удалить карточку.", show_alert=True)
+            return
+        await callback.answer()
         return
 
     text = await _view_text(session, group, target_id, view, bot_id=bot.id)
