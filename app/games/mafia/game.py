@@ -62,6 +62,12 @@ def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, parsed))
 
 
+def _remember_finish_context(game: GameSession, phase: str) -> None:
+    state = dict(game.state_json or {})
+    state["finish_context"] = {"phase": phase}
+    game.state_json = state
+
+
 class MafiaGame(BaseGame):
     definition = mafia_definition
 
@@ -125,6 +131,7 @@ class MafiaGame(BaseGame):
             "last_day_result": None,
             "last_night_result": None,
             "last_afk_removed": [],
+            "finish_context": None,
             "timers": timers,
         }
         game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=timers["day_start"])
@@ -216,6 +223,7 @@ class MafiaGame(BaseGame):
             await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
+                _remember_finish_context(game, current)
                 await finish_game(session, game, winning_team)
                 log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
                 return True
@@ -235,6 +243,7 @@ class MafiaGame(BaseGame):
             await self._penalize_missing_actions(session, game, current)
             winning_team = await winner(session, game.id)
             if winning_team is not None:
+                _remember_finish_context(game, current)
                 await finish_game(session, game, winning_team)
                 log.info("mafia_finished", game_id=game.id, winner=winning_team, phase=current)
                 return True
