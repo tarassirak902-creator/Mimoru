@@ -9,7 +9,13 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.game_models import GameAction, GameGroupSettings, GamePlayer, GameResult, GameSession
+from app.db.game_models import (
+    GameAction,
+    GameGroupSettings,
+    GamePlayer,
+    GameResult,
+    GameSession,
+)
 from app.games.base import BaseGame
 from app.games.config import GameDefinition
 from app.games.enums import GameSessionStatus
@@ -30,7 +36,7 @@ spy_definition = GameDefinition(
     code="spy",
     title="🕵️ Шпион",
     min_players=4,
-    max_players=12,
+    max_players=8,
     exclusive_group_game=True,
     supports_rating=True,
     supports_spectators=False,
@@ -57,6 +63,7 @@ LOCATIONS = (
     "Театр",
     "Университет",
 )
+LOCATION_OPTIONS_PER_GAME = 8
 
 
 def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
@@ -70,14 +77,26 @@ def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
 class SpyGame(BaseGame):
     definition = spy_definition
 
-    async def _players(self, session: AsyncSession, game_id: int, *, for_update: bool = False) -> list[GamePlayer]:
-        query = select(GamePlayer).where(GamePlayer.game_id == game_id).order_by(GamePlayer.id)
+    async def _players(
+        self,
+        session: AsyncSession,
+        game_id: int,
+        *,
+        for_update: bool = False,
+    ) -> list[GamePlayer]:
+        query = (
+            select(GamePlayer)
+            .where(GamePlayer.game_id == game_id)
+            .order_by(GamePlayer.id)
+        )
         if for_update:
             query = query.with_for_update()
         return list((await session.scalars(query)).all())
 
     async def start(self, session: AsyncSession, game: GameSession) -> None:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
         if game is None:
             return
         players = await self._players(session, game.id, for_update=True)
@@ -87,13 +106,18 @@ class SpyGame(BaseGame):
         settings = await session.get(GameGroupSettings, game.group_id)
         all_settings = dict(settings.settings_json or {}) if settings is not None else {}
         spy_settings = dict(all_settings.get("spy") or {})
-        discussion_seconds = _bounded_int(spy_settings.get("discussion_seconds"), 180, 30, 900)
-        voting_seconds = _bounded_int(spy_settings.get("voting_seconds"), 60, 15, 300)
+        discussion_seconds = _bounded_int(
+            spy_settings.get("discussion_seconds"), 180, 30, 900
+        )
+        voting_seconds = _bounded_int(
+            spy_settings.get("voting_seconds"), 60, 15, 300
+        )
         guess_seconds = _bounded_int(spy_settings.get("guess_seconds"), 45, 15, 180)
 
         rng = random.SystemRandom()
         location = rng.choice(LOCATIONS)
-        options = list(LOCATIONS)
+        distractors = [candidate for candidate in LOCATIONS if candidate != location]
+        options = [location, *rng.sample(distractors, LOCATION_OPTIONS_PER_GAME - 1)]
         rng.shuffle(options)
         spy_player = rng.choice(players)
         for player in players:
@@ -118,9 +142,16 @@ class SpyGame(BaseGame):
                 "guess": guess_seconds,
             },
         }
-        game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=discussion_seconds)
+        game.deadline_at = datetime.now(timezone.utc) + timedelta(
+            seconds=discussion_seconds
+        )
         await session.commit()
-        log.info("spy_started", game_id=game.id, group_id=game.group_id, players=len(players))
+        log.info(
+            "spy_started",
+            game_id=game.id,
+            group_id=game.group_id,
+            players=len(players),
+        )
 
     async def handle_action(
         self,
@@ -133,8 +164,15 @@ class SpyGame(BaseGame):
     ) -> None:
         raise ValueError(f"unsupported spy action: {action}")
 
-    async def _finish(self, session: AsyncSession, game: GameSession, winning_team: str) -> None:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+    async def _finish(
+        self,
+        session: AsyncSession,
+        game: GameSession,
+        winning_team: str,
+    ) -> None:
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
         if game is None or game.status == GameSessionStatus.FINISHED.value:
             return
         players = await self._players(session, game.id, for_update=True)
@@ -147,24 +185,32 @@ class SpyGame(BaseGame):
         game.deadline_at = None
         game.finished_at = now
         game.finish_reason = f"winner:{winning_team}"
-        duration = int((now - game.started_at).total_seconds()) if game.started_at else None
-        existing_result = await session.scalar(select(GameResult).where(GameResult.game_id == game.id))
+        duration = (
+            int((now - game.started_at).total_seconds()) if game.started_at else None
+        )
+        existing_result = await session.scalar(
+            select(GameResult).where(GameResult.game_id == game.id)
+        )
         state = dict(game.state_json or {})
         if existing_result is None:
-            session.add(GameResult(
-                game_id=game.id,
-                group_id=game.group_id,
-                game_type=game.game_type,
-                winner_type="team",
-                winner_json={"team": winning_team},
-                summary_json={
-                    "rounds": game.round_no,
-                    "players": len(players),
-                    "location": state.get("location"),
-                    "suspect_user_id": (state.get("last_vote") or {}).get("suspect_user_id"),
-                },
-                duration_seconds=duration,
-            ))
+            session.add(
+                GameResult(
+                    game_id=game.id,
+                    group_id=game.group_id,
+                    game_type=game.game_type,
+                    winner_type="team",
+                    winner_json={"team": winning_team},
+                    summary_json={
+                        "rounds": game.round_no,
+                        "players": len(players),
+                        "location": state.get("location"),
+                        "suspect_user_id": (state.get("last_vote") or {}).get(
+                            "suspect_user_id"
+                        ),
+                    },
+                    duration_seconds=duration,
+                )
+            )
         for player in players:
             player_state = dict(player.state_json or {})
             if player_state.get("result_applied"):
@@ -183,8 +229,16 @@ class SpyGame(BaseGame):
         await session.commit()
         log.info("spy_finished", game_id=game.id, winner=winning_team)
 
-    async def _resolve_vote(self, session: AsyncSession, game: GameSession, *, expected_phase_seq: int) -> bool:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+    async def _resolve_vote(
+        self,
+        session: AsyncSession,
+        game: GameSession,
+        *,
+        expected_phase_seq: int,
+    ) -> bool:
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
         if (
             game is None
             or game.status != GameSessionStatus.RUNNING.value
@@ -192,19 +246,29 @@ class SpyGame(BaseGame):
             or game.phase_seq != expected_phase_seq
         ):
             return False
-        actions = list((await session.scalars(
-            select(GameAction).where(
-                GameAction.game_id == game.id,
-                GameAction.phase_seq == game.phase_seq,
-                GameAction.action_type == "spy_vote",
-            )
-        )).all())
-        counts = Counter(action.target_telegram_id for action in actions if action.target_telegram_id is not None)
+        actions = list(
+            (
+                await session.scalars(
+                    select(GameAction).where(
+                        GameAction.game_id == game.id,
+                        GameAction.phase_seq == game.phase_seq,
+                        GameAction.action_type == "spy_vote",
+                    )
+                )
+            ).all()
+        )
+        counts = Counter(
+            action.target_telegram_id
+            for action in actions
+            if action.target_telegram_id is not None
+        )
         suspect_id = None
         tie = True
         if counts:
             highest = max(counts.values())
-            leaders = [user_id for user_id, count in counts.items() if count == highest]
+            leaders = [
+                user_id for user_id, count in counts.items() if count == highest
+            ]
             if len(leaders) == 1:
                 suspect_id = leaders[0]
                 tie = False
@@ -228,21 +292,39 @@ class SpyGame(BaseGame):
         await session.commit()
         return True
 
-    async def maybe_advance_if_ready(self, session: AsyncSession, game: GameSession) -> bool:
+    async def maybe_advance_if_ready(
+        self,
+        session: AsyncSession,
+        game: GameSession,
+    ) -> bool:
         game = await session.get(GameSession, game.id)
-        if game is None or game.status != GameSessionStatus.RUNNING.value or game.phase != SpyPhase.VOTING.value:
+        if (
+            game is None
+            or game.status != GameSessionStatus.RUNNING.value
+            or game.phase != SpyPhase.VOTING.value
+        ):
             return False
         total = len(await self._players(session, game.id))
-        acted = len(list((await session.scalars(
-            select(GameAction.id).where(
-                GameAction.game_id == game.id,
-                GameAction.phase_seq == game.phase_seq,
-                GameAction.action_type == "spy_vote",
+        acted = len(
+            list(
+                (
+                    await session.scalars(
+                        select(GameAction.id).where(
+                            GameAction.game_id == game.id,
+                            GameAction.phase_seq == game.phase_seq,
+                            GameAction.action_type == "spy_vote",
+                        )
+                    )
+                ).all()
             )
-        )).all()))
+        )
         if acted < total:
             return False
-        return await self._resolve_vote(session, game, expected_phase_seq=game.phase_seq)
+        return await self._resolve_vote(
+            session,
+            game,
+            expected_phase_seq=game.phase_seq,
+        )
 
     async def guess_location(
         self,
@@ -252,8 +334,14 @@ class SpyGame(BaseGame):
         actor_telegram_id: int,
         number: int,
     ) -> tuple[str, bool]:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
-        if game is None or game.status != GameSessionStatus.RUNNING.value or game.phase != SpyPhase.SPY_GUESS.value:
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
+        if (
+            game is None
+            or game.status != GameSessionStatus.RUNNING.value
+            or game.phase != SpyPhase.SPY_GUESS.value
+        ):
             raise ValueError("guess phase is not active")
         state = dict(game.state_json or {})
         if actor_telegram_id != state.get("spy_user_id"):
@@ -273,22 +361,30 @@ class SpyGame(BaseGame):
         if number < 1 or number > len(options):
             raise ValueError("invalid location number")
         guessed = str(options[number - 1])
-        session.add(GameAction(
-            game_id=game.id,
-            round_no=game.round_no,
-            phase_seq=game.phase_seq,
-            actor_telegram_id=actor_telegram_id,
-            action_type="spy_location_guess",
-            target_telegram_id=None,
-            payload_json={"number": number, "location": guessed},
-        ))
+        session.add(
+            GameAction(
+                game_id=game.id,
+                round_no=game.round_no,
+                phase_seq=game.phase_seq,
+                actor_telegram_id=actor_telegram_id,
+                action_type="spy_location_guess",
+                target_telegram_id=None,
+                payload_json={"number": number, "location": guessed},
+            )
+        )
         await session.flush()
         winning_team = "spy" if guessed == state.get("location") else "locals"
         await self._finish(session, game, winning_team)
         return guessed, True
 
-    async def handle_timeout(self, session: AsyncSession, game: GameSession) -> None:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+    async def handle_timeout(
+        self,
+        session: AsyncSession,
+        game: GameSession,
+    ) -> None:
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
         if game is None or game.status != GameSessionStatus.RUNNING.value:
             return
         if game.phase == SpyPhase.DISCUSSION.value:
@@ -302,7 +398,11 @@ class SpyGame(BaseGame):
             await session.commit()
             return
         if game.phase == SpyPhase.VOTING.value:
-            await self._resolve_vote(session, game, expected_phase_seq=game.phase_seq)
+            await self._resolve_vote(
+                session,
+                game,
+                expected_phase_seq=game.phase_seq,
+            )
             return
         if game.phase == SpyPhase.SPY_GUESS.value:
             await self._finish(session, game, "locals")
@@ -310,16 +410,30 @@ class SpyGame(BaseGame):
         raise ValueError(f"unsupported spy timeout phase: {game.phase}")
 
     async def restore(self, session: AsyncSession, game: GameSession) -> None:
-        game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
+        game = await session.scalar(
+            select(GameSession).where(GameSession.id == game.id).with_for_update()
+        )
         if game is None:
             return
         if game.phase == "recovering":
             players = await self._players(session, game.id)
             if not players:
                 raise ValueError("spy game has no players")
-            if not any(player.role == "spy" for player in players):
+            state = dict(game.state_json or {})
+            has_roles = sum(player.role == "spy" for player in players) == 1
+            has_state = bool(
+                state.get("location")
+                and state.get("spy_user_id")
+                and state.get("location_options")
+            )
+            if not has_roles or not has_state:
+                game.status = GameSessionStatus.RUNNING.value
+                await session.commit()
                 await self.start(session, game)
                 return
+            game.status = GameSessionStatus.RUNNING.value
+            game.phase = SpyPhase.DISCUSSION.value
+            game.phase_seq += 1
         if game.phase not in {
             SpyPhase.DISCUSSION.value,
             SpyPhase.VOTING.value,
@@ -338,7 +452,12 @@ class SpyGame(BaseGame):
             if game.phase in defaults:
                 key, default, minimum, maximum = defaults[game.phase]
                 game.deadline_at = datetime.now(timezone.utc) + timedelta(
-                    seconds=_bounded_int(timers.get(key), default, minimum, maximum)
+                    seconds=_bounded_int(
+                        timers.get(key),
+                        default,
+                        minimum,
+                        maximum,
+                    )
                 )
         await session.commit()
 
