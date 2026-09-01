@@ -21,10 +21,12 @@ def test_game_settings_default_view_matches_model_defaults() -> None:
     callbacks = _callbacks(settings_markup(None))
 
     assert "🎮 Игры: включены" in text
+    assert "🧩 Разрешённые игры: 10/10" in text
     assert "🏆 Рейтинг: включён" in text
     assert "создатель лобби или администратор" in text
     assert callbacks == [
         "gm:cfg:enabled",
+        "gm:cfg:games",
         "gm:cfg:rating",
         "gm:cfg:creator",
         "gm:cfg:mafia",
@@ -35,12 +37,14 @@ def test_game_settings_default_view_matches_model_defaults() -> None:
 def test_game_settings_render_changed_values() -> None:
     settings = SimpleNamespace(
         enabled=False,
+        allowed_games=[],
         rating_enabled=False,
         creator_policy="any_at_min",
     )
     text = settings_text(settings)
 
     assert "🎮 Игры: выключены" in text
+    assert "🧩 Разрешённые игры: 10/10" in text
     assert "🏆 Рейтинг: выключен" in text
     assert "любой участник лобби после набора минимума" in text
 

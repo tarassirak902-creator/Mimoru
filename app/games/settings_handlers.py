@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.game_models import GameGroupSettings
 from app.db.models import Group
+from app.games.registry import game_registry
 from app.services.access import can_manage_group
 
 
@@ -51,6 +52,18 @@ def _setting_values(settings: GameGroupSettings | None) -> tuple[bool, bool, str
     if settings is None:
         return True, True, "lobby_creator"
     return settings.enabled, settings.rating_enabled, settings.creator_policy
+
+
+def _game_codes() -> list[str]:
+    return [definition.code for definition in game_registry.all()]
+
+
+def _effective_allowed_games(settings: GameGroupSettings | None) -> set[str]:
+    all_codes = set(_game_codes())
+    configured = list(getattr(settings, "allowed_games", []) or []) if settings is not None else []
+    if not configured:
+        return all_codes
+    return {code for code in configured if code in all_codes}
 
 
 def _mafia_dict(settings: GameGroupSettings | None) -> dict:
@@ -100,9 +113,12 @@ def settings_text(settings: GameGroupSettings | None) -> str:
         if creator_policy == "lobby_creator"
         else "любой участник лобби после набора минимума"
     )
+    allowed_count = len(_effective_allowed_games(settings))
+    total_count = len(_game_codes())
     return (
         "⚙️ НАСТРОЙКИ ИГР\n\n"
         f"🎮 Игры: {'включены' if enabled else 'выключены'}\n"
+        f"🧩 Разрешённые игры: {allowed_count}/{total_count}\n"
         f"🏆 Рейтинг: {'включён' if rating_enabled else 'выключен'}\n"
         f"▶️ Запуск лобби: {creator_label}\n\n"
         "Изменять эти параметры могут только управляющие группы. "
@@ -117,10 +133,16 @@ def settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardMarkup:
         if creator_policy == "lobby_creator"
         else "👥 Запуск: участники"
     )
+    allowed_count = len(_effective_allowed_games(settings))
+    total_count = len(_game_codes())
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"🎮 Игры: {'ON' if enabled else 'OFF'}",
             callback_data="gm:cfg:enabled",
+        )],
+        [InlineKeyboardButton(
+            text=f"🧩 Разрешённые: {allowed_count}/{total_count}",
+            callback_data="gm:cfg:games",
         )],
         [InlineKeyboardButton(
             text=f"🏆 Рейтинг: {'ON' if rating_enabled else 'OFF'}",
@@ -130,6 +152,35 @@ def settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🐺 Мафия", callback_data="gm:cfg:mafia")],
         [InlineKeyboardButton(text="◀️ В игровой центр", callback_data="gm:home")],
     ])
+
+
+def allowed_games_text(settings: GameGroupSettings | None) -> str:
+    allowed = _effective_allowed_games(settings)
+    definitions = game_registry.all()
+    lines = [
+        "🧩 РАЗРЕШЁННЫЕ ИГРЫ",
+        "",
+        f"Включено: {len(allowed)}/{len(definitions)}",
+        "",
+        "Нажмите на игру, чтобы разрешить или запретить создание новых лобби.",
+        "Уже запущенная партия не останавливается.",
+    ]
+    return "\n".join(lines)
+
+
+def allowed_games_markup(settings: GameGroupSettings | None) -> InlineKeyboardMarkup:
+    allowed = _effective_allowed_games(settings)
+    definitions = game_registry.all()
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{'✅' if definition.code in allowed else '❌'} {definition.title}",
+            callback_data=f"gm:cfg:game:{definition.code}",
+        )
+        for definition in definitions
+    ]
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="◀️ Общие настройки", callback_data="gm:settings")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def mafia_settings_text(settings: GameGroupSettings | None) -> str:
@@ -288,6 +339,15 @@ async def _render(callback: CallbackQuery, settings: GameGroupSettings | None) -
     )
 
 
+async def _render_allowed_games(callback: CallbackQuery, settings: GameGroupSettings | None) -> None:
+    if callback.message is None:
+        return
+    await callback.message.edit_text(
+        allowed_games_text(settings),
+        reply_markup=allowed_games_markup(settings),
+    )
+
+
 async def _render_mafia(callback: CallbackQuery, settings: GameGroupSettings | None) -> None:
     if callback.message is None:
         return
@@ -314,6 +374,50 @@ async def game_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession
     settings = await session.get(GameGroupSettings, group.id)
     await _render(callback, settings)
     await callback.answer()
+
+
+@router.callback_query(F.data == "gm:cfg:games")
+async def allowed_games_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    settings = await session.get(GameGroupSettings, group.id)
+    await _render_allowed_games(callback, settings)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^gm:cfg:game:[a-z0-9_]{1,32}$"))
+async def allowed_game_toggle(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    code = (callback.data or "").rsplit(":", 1)[-1]
+    if game_registry.get(code) is None:
+        await callback.answer("Эта игра больше не доступна.", show_alert=True)
+        return
+    settings = await _locked_settings(session, group_id=group.id)
+    if settings is None:
+        await callback.answer("Группа больше не подключена к Mimoru.", show_alert=True)
+        return
+
+    all_codes = _game_codes()
+    allowed = _effective_allowed_games(settings)
+    if code in allowed:
+        if len(allowed) <= 1:
+            await callback.answer(
+                "Нельзя отключить последнюю разрешённую игру. Используйте общий переключатель «Игры: OFF».",
+                show_alert=True,
+            )
+            return
+        allowed.remove(code)
+    else:
+        allowed.add(code)
+
+    settings.allowed_games = [] if allowed == set(all_codes) else [item for item in all_codes if item in allowed]
+    await session.commit()
+    await session.refresh(settings)
+    await _render_allowed_games(callback, settings)
+    await callback.answer("Список разрешённых игр сохранён")
 
 
 @router.callback_query(F.data == "gm:cfg:mafia")
