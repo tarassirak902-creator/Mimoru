@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from app.games.settings_handlers import (
     _mafia_timer_values,
     _next_mafia_timer_value,
+    mafia_reset_markup,
+    mafia_reset_text,
     mafia_settings_markup,
     mafia_settings_text,
     mafia_timer_settings_markup,
@@ -39,6 +41,7 @@ def test_mafia_settings_defaults_match_game_engine_defaults() -> None:
         "gm:cfg:mafia:repeat",
         "gm:cfg:mafia:afk",
         "gm:cfg:mafia:timers",
+        "gm:cfg:mafia:reset",
         "gm:settings",
     ]
 
@@ -167,3 +170,34 @@ def test_mafia_engine_timer_defaults_and_bounds_stay_aligned_with_ui() -> None:
     assert 'mafia_settings.get("result_seconds"), 10, 3, 60' in source
     assert 'mafia_settings.get("night_start_seconds"), 10, 3, 60' in source
     assert 'mafia_settings.get("night_seconds"), 60, 15, 300' in source
+
+
+def test_mafia_reset_requires_explicit_confirmation() -> None:
+    text = mafia_reset_text()
+    callbacks = _callbacks(mafia_reset_markup())
+
+    assert "стандартные правила Доктора" in text
+    assert "Общие настройки игр" in text
+    assert callbacks == [
+        "gm:cfg:mafia:reset:confirm",
+        "gm:cfg:mafia",
+    ]
+
+
+def test_mafia_reset_only_removes_mafia_subtree_under_locked_admin_path() -> None:
+    source = (ROOT / "app/games/settings_handlers.py").read_text(encoding="utf-8")
+    prompt = source.split("async def mafia_settings_reset_prompt", 1)[1].split(
+        "async def game_settings_toggle", 1
+    )[0]
+    confirm = source.split("async def mafia_settings_reset_confirm", 1)[1]
+
+    assert "_managed_group(" in prompt
+    assert "mafia_reset_text()" in prompt
+    assert "mafia_reset_markup()" in prompt
+    assert "_managed_group(" in confirm
+    assert "_locked_settings(" in confirm
+    assert "all_settings = dict(settings.settings_json or {})" in confirm
+    assert 'all_settings.pop("mafia", None)' in confirm
+    assert "settings.settings_json = all_settings" in confirm
+    assert "settings.settings_json = {}" not in confirm
+    assert "await session.commit()" in confirm
