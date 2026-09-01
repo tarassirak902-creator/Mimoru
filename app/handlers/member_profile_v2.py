@@ -45,9 +45,8 @@ def _profile_keyboard(group_id: int, target_id: int, requester_id: int, active: 
     rp_label = "🎭 Мои РП" if target_id == requester_id else "🎭 РП"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [button("profile", "👤 Профиль")],
-            [button("history", "⚖️ История"), button("games", "🎮 Игры")],
-            [button("rp", rp_label)],
+            [button("profile", "👤 Профиль"), button("history", "⚖️ История")],
+            [button("games", "🎮 Игры"), button("rp", rp_label)],
             [button("close", "❌ Закрыть")],
         ]
     )
