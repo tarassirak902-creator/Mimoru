@@ -6,6 +6,7 @@ from app.games.battleship import BattleshipGame, battleship_definition
 from app.games.roulette import RouletteGame, roulette_definition
 from app.games.crocodile import CrocodileGame, crocodile_definition
 from app.games.cards import CardsGame, cards_definition
+from app.games.arena import ArenaGame, arena_definition
 
 
 def register_builtin_games() -> None:
@@ -23,6 +24,8 @@ def register_builtin_games() -> None:
         game_registry.register(crocodile_definition, CrocodileGame())
     if game_registry.get(cards_definition.code) is None:
         game_registry.register(cards_definition, CardsGame())
+    if game_registry.get(arena_definition.code) is None:
+        game_registry.register(arena_definition, ArenaGame())
 
 
 register_builtin_games()
