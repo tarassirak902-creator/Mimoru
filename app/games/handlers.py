@@ -93,14 +93,14 @@ async def _can_start_lobby(
 
 
 def _games_markup() -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for definition in game_registry.all():
-        rows.append([
-            InlineKeyboardButton(
-                text=definition.title,
-                callback_data=f"gm:new:{definition.code}",
-            )
-        ])
+    buttons = [
+        InlineKeyboardButton(
+            text=definition.title,
+            callback_data=f"gm:new:{definition.code}",
+        )
+        for definition in game_registry.all()
+    ]
+    rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="◀️ В игровой центр", callback_data="gm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -380,29 +380,17 @@ async def game_cancel(callback: CallbackQuery, bot: Bot, session: AsyncSession) 
     if resolved is None:
         return
     game, group = resolved
-    if game.status not in {
-        GameSessionStatus.LOBBY.value,
-        GameSessionStatus.RUNNING.value,
-        GameSessionStatus.RECOVERING.value,
-    }:
-        await callback.answer("❌ Эта кнопка больше не активна.", show_alert=True)
+    if not await _can_start_lobby(bot, session, group=group, game=game, user_id=callback.from_user.id):
+        await callback.answer("❌ Только создатель лобби или администратор может отменить игру.", show_alert=True)
         return
-    can_cancel = callback.from_user.id == game.creator_telegram_id or await can_manage_group(
-        bot, group, callback.from_user.id, session
-    )
-    if not can_cancel:
-        await callback.answer("❌ Отменить игру может создатель или администратор.", show_alert=True)
+    try:
+        await manager.cancel_game(session, game_id=game.id, reason="cancelled_from_lobby")
+    except GameNotFoundError:
+        await callback.answer("Игра уже завершена.", show_alert=True)
         return
-    game = await manager.cancel_game(session, game_id=game.id, reason="cancelled_by_user")
-    await close_lobby_message(
-        bot,
-        session,
-        group=group,
-        game=game,
-        text=f"❌ {game_registry.require(game.game_type).title} отменена.",
-    )
+    await close_lobby_message(bot, session, group=group, game=game, text="❌ Лобби отменено.")
     await ensure_game_panel(bot, session, group=group, pin=False)
-    log.info("game_cancelled", game_id=game.id, group_id=group.id, actor_id=callback.from_user.id)
+    log.info("game_cancelled", game_id=game.id, group_id=group.id)
     await callback.answer("Игра отменена")
 
 
@@ -417,23 +405,15 @@ async def game_open(callback: CallbackQuery, bot: Bot, session: AsyncSession) ->
         await ensure_lobby_message(bot, session, group=group, game=game, manager=manager)
         await callback.answer("Лобби обновлено")
         return
-    if game.status not in {GameSessionStatus.RUNNING.value, GameSessionStatus.RECOVERING.value}:
-        await callback.answer("❌ Эта игровая сессия уже завершена.", show_alert=True)
+    engine = game_registry.engine(game.game_type)
+    if engine is None:
+        await callback.answer("Игровой интерфейс недоступен.", show_alert=True)
         return
-
-    entry = game_registry.get_entry(game.game_type)
-    sync_ui = getattr(entry.engine, "sync_ui", None) if entry is not None else None
-    if sync_ui is not None:
-        try:
-            await sync_ui(bot, session, game)
-        except Exception:
-            log.exception("game_open_sync_failed", game_id=game.id, game_type=game.game_type)
-            await callback.answer("Не удалось открыть карточку игры. Попробуйте ещё раз.", show_alert=True)
-            return
-        await callback.answer("👀 Актуальная карточка игры обновлена")
+    try:
+        await engine.restore(session, game)
+    except Exception:
+        log.exception("game_open_restore_failed", game_id=game.id, game_type=game.game_type)
+        await callback.answer("Не удалось обновить игровое состояние.", show_alert=True)
         return
-
-    await callback.answer(
-        f"{game_registry.require(game.game_type).title}: фаза {game.phase}, раунд {game.round_no}.",
-        show_alert=True,
-    )
+    await ensure_game_panel(bot, session, group=group, pin=False)
+    await callback.answer("Игровое состояние обновлено")
