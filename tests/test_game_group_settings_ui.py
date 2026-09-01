@@ -49,8 +49,8 @@ def test_game_settings_callbacks_require_management_and_lock_writes() -> None:
     toggle = source.split("async def game_settings_toggle", 1)[1]
 
     assert "can_manage_group(" in source
-    assert "for_update=True" in toggle
-    assert "query = query.with_for_update()" in source
+    assert ".with_for_update()" in toggle
+    assert toggle.index("_managed_group(") < toggle.index(".with_for_update()")
     assert "GameGroupSettings(" in toggle
     assert "await session.flush()" in toggle
     assert "await session.commit()" in toggle
