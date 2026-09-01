@@ -55,10 +55,6 @@ async def recover_active_games(bot: Bot | None = None) -> None:
                 log.error("game_recovery_engine_missing", game_id=game.id, game_type=game.game_type)
                 continue
             try:
-                # start_lobby() durably publishes phase="starting" before the concrete
-                # engine initializes its state. A process crash in that short window must
-                # re-run start(), not ask each engine's restore() to understand "starting".
-                # phase="recovering" is likewise an explicitly incomplete startup state.
                 if game.phase in {"starting", "recovering"}:
                     await entry.engine.start(session, game)
                     log.info(
@@ -69,7 +65,6 @@ async def recover_active_games(bot: Bot | None = None) -> None:
                 else:
                     await entry.engine.restore(session, game)
             except Exception:
-                # Never commit partially-mutated engine state after a failed recovery.
                 await session.rollback()
                 game = await session.scalar(
                     select(GameSession).where(GameSession.id == game_id).with_for_update()
@@ -148,15 +143,24 @@ async def process_game_timeouts(bot: Bot | None = None) -> None:
                 log.error("game_timeout_engine_missing", game_id=game.id, game_type=game.game_type)
                 continue
             expected_phase_seq = game.phase_seq
+            game_type = game.game_type
             try:
                 await entry.engine.handle_timeout(session, game)
             except Exception:
-                game.status = GameSessionStatus.RECOVERING.value
-                await session.commit()
+                # Timeout handlers are allowed to mutate several rows before their final
+                # commit. If anything fails, discard all partial mutations first; otherwise
+                # the RECOVERING commit could accidentally persist half of a phase change.
+                await session.rollback()
+                game = await session.scalar(
+                    select(GameSession).where(GameSession.id == game_id).with_for_update()
+                )
+                if game is not None and game.status == GameSessionStatus.RUNNING.value:
+                    game.status = GameSessionStatus.RECOVERING.value
+                    await session.commit()
                 log.exception(
                     "game_timeout_failed",
-                    game_id=game.id,
-                    game_type=game.game_type,
+                    game_id=game_id,
+                    game_type=game_type,
                     phase_seq=expected_phase_seq,
                 )
                 continue
