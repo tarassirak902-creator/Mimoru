@@ -50,6 +50,20 @@ def test_game_timeouts_revalidate_deadline_under_lock() -> None:
     assert '"game_timeout_failed"' in timeout
 
 
+def test_failed_timeout_rolls_back_before_marking_recovering() -> None:
+    source = (ROOT / "app/games/recovery.py").read_text(encoding="utf-8")
+    timeout = source.split("async def process_game_timeouts(bot: Bot | None = None)", 1)[1]
+
+    handler = timeout.index("await entry.engine.handle_timeout(session, game)")
+    rollback = timeout.index("await session.rollback()", handler)
+    refetch = timeout.index(
+        "select(GameSession).where(GameSession.id == game_id).with_for_update()", rollback
+    )
+    mark = timeout.index("game.status = GameSessionStatus.RECOVERING.value", refetch)
+    commit = timeout.index("await session.commit()", mark)
+    assert handler < rollback < refetch < mark < commit
+
+
 def test_game_jobs_use_existing_leader_scheduler() -> None:
     scheduler = (ROOT / "app/tasks_scheduler.py").read_text(encoding="utf-8")
 
