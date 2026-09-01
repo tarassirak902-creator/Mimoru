@@ -9,6 +9,9 @@ from app.games.spy.game import SpyPhase
 from app.games.targets import ensure_target_map, get_target_map
 
 
+PRIVATE_NAME_LIMIT = 18
+
+
 async def _active_player(
     session: AsyncSession,
     *,
@@ -32,18 +35,26 @@ async def ensure_spy_vote_map(
 ):
     if game.phase != SpyPhase.VOTING.value:
         raise GameActionError("voting is not active")
-    actor = await _active_player(session, game_id=game.id, user_id=actor_user_id)
+    actor = await _active_player(
+        session,
+        game_id=game.id,
+        user_id=actor_user_id,
+    )
     if actor is None:
         raise GameActionError("actor is not active player")
-    targets = list((await session.scalars(
-        select(GamePlayer.user_telegram_id)
-        .where(
-            GamePlayer.game_id == game.id,
-            GamePlayer.status == "alive",
-            GamePlayer.user_telegram_id != actor_user_id,
-        )
-        .order_by(GamePlayer.id)
-    )).all())
+    targets = list(
+        (
+            await session.scalars(
+                select(GamePlayer.user_telegram_id)
+                .where(
+                    GamePlayer.game_id == game.id,
+                    GamePlayer.status == "alive",
+                    GamePlayer.user_telegram_id != actor_user_id,
+                )
+                .order_by(GamePlayer.id)
+            )
+        ).all()
+    )
     return await ensure_target_map(
         session,
         game_id=game.id,
@@ -59,18 +70,32 @@ async def spy_vote_map_lines(
     game: GameSession,
     actor_user_id: int,
 ) -> list[str]:
-    await ensure_spy_vote_map(session, game=game, actor_user_id=actor_user_id)
+    await ensure_spy_vote_map(
+        session,
+        game=game,
+        actor_user_id=actor_user_id,
+    )
     rows = await get_target_map(
         session,
         game_id=game.id,
         phase_seq=game.phase_seq,
         actor_telegram_id=actor_user_id,
     )
-    players = list((await session.scalars(
-        select(GamePlayer).where(GamePlayer.game_id == game.id)
-    )).all())
-    names = {player.user_telegram_id: player.display_name for player in players}
-    return [f"{row.number} — {names.get(row.target_telegram_id, 'Игрок')}" for row in rows]
+    players = list(
+        (
+            await session.scalars(
+                select(GamePlayer).where(GamePlayer.game_id == game.id)
+            )
+        ).all()
+    )
+    names = {
+        player.user_telegram_id: (player.display_name or "Игрок")[:PRIVATE_NAME_LIMIT]
+        for player in players
+    }
+    return [
+        f"{row.number} — {names.get(row.target_telegram_id, 'Игрок')}"
+        for row in rows
+    ]
 
 
 async def record_spy_vote(
@@ -80,7 +105,11 @@ async def record_spy_vote(
     actor_user_id: int,
     number: int,
 ):
-    await ensure_spy_vote_map(session, game=game, actor_user_id=actor_user_id)
+    await ensure_spy_vote_map(
+        session,
+        game=game,
+        actor_user_id=actor_user_id,
+    )
     return await record_numbered_action(
         session,
         game_id=game.id,
