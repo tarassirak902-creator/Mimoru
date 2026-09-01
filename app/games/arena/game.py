@@ -179,11 +179,66 @@ class ArenaGame(BaseGame):
             return
         state = dict(game.state_json or {})
         uid = int(state.get("turn_user_id") or 0)
-        player = await session.scalar(select(GamePlayer).where(GamePlayer.game_id == game.id, GamePlayer.user_telegram_id == uid).with_for_update())
-        if player is not None:
-            player.afk_count += 1
+        players = await self._players(session, game.id, for_update=True)
+        actor = next(
+            (player for player in players if player.user_telegram_id == uid and player.status == "alive"),
+            None,
+        )
+        if actor is None:
+            return
+
+        existing = await session.scalar(select(GameAction).where(
+            GameAction.game_id == game.id,
+            GameAction.phase_seq == game.phase_seq,
+            GameAction.actor_telegram_id == uid,
+        ))
+        if existing is not None:
+            return
+
+        actor.afk_count += 1
+        actor_state = dict(actor.state_json or {})
+        actor_state["guard"] = True
+        actor.state_json = actor_state
+        state["last_action"] = {
+            "user_id": uid,
+            "result": "guard",
+            "action": "guard",
+            "timeout": True,
+        }
+        session.add(GameAction(
+            game_id=game.id,
+            round_no=game.round_no,
+            phase_seq=game.phase_seq,
+            actor_telegram_id=uid,
+            action_type="arena_timeout_guard",
+            payload_json={"action": "guard", "timeout": True},
+        ))
+        await session.flush()
+
+        alive = [player for player in players if player.status == "alive"]
+        if len(alive) <= 1 or game.round_no >= MAX_ROUNDS:
+            winner = alive[0] if len(alive) == 1 else max(
+                alive,
+                key=lambda player: (int((player.state_json or {}).get("hp") or 0), player.score),
+            )
+            game.state_json = state
+            await self._finish(session, game, winner.user_telegram_id)
+            return
+
+        order = [int(user_id) for user_id in list(state.get("turn_order") or [])]
+        index = int(state.get("turn_index") or 0)
+        alive_ids = {player.user_telegram_id for player in alive}
+        for _ in range(len(order)):
+            index = (index + 1) % len(order)
+            if order[index] in alive_ids:
+                break
+        state["turn_index"] = index
+        state["turn_user_id"] = order[index]
+        game.state_json = state
+        game.phase_seq += 1
+        game.round_no += 1
+        game.deadline_at = datetime.now(timezone.utc) + timedelta(seconds=TURN_TIMEOUT_SECONDS)
         await session.commit()
-        await self.act(session, game, actor_telegram_id=uid, action="guard")
 
     async def restore(self, session: AsyncSession, game: GameSession) -> None:
         game = await session.scalar(select(GameSession).where(GameSession.id == game.id).with_for_update())
