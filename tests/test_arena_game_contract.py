@@ -18,12 +18,23 @@ def test_arena_definition_and_combat_contract():
     assert 'apply_game_result(' in source
 
 
-def test_arena_timeout_recovery_and_ui_contract():
+def test_arena_timeout_is_atomic_and_recovery_safe():
+    game = read("app/games/arena/game.py")
+    timeout = game.split("async def handle_timeout", 1)[1].split("async def restore", 1)[0]
+
+    assert 'action_type="arena_timeout_guard"' in timeout
+    assert 'actor.afk_count += 1' in timeout
+    assert 'actor_state["guard"] = True' in timeout
+    assert 'game.phase_seq += 1' in timeout
+    assert 'game.deadline_at = datetime.now(timezone.utc)' in timeout
+    assert 'await self.act(' not in timeout
+    assert timeout.count("await session.commit()") == 1
+
+
+def test_arena_recovery_and_ui_contract():
     game = read("app/games/arena/game.py")
     handlers = read("app/games/arena/handlers.py")
     keyboard = read("app/games/arena/keyboards.py")
-    assert 'async def handle_timeout' in game
-    assert 'action="guard"' in game
     assert 'async def restore' in game
     assert 'game.phase_seq != seq' in handlers
     assert 'gm:aa:' in keyboard and 'gm:ag:' in keyboard and 'gm:ah:' in keyboard
