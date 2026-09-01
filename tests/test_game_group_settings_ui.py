@@ -27,6 +27,7 @@ def test_game_settings_default_view_matches_model_defaults() -> None:
         "gm:cfg:enabled",
         "gm:cfg:rating",
         "gm:cfg:creator",
+        "gm:cfg:mafia",
         "gm:home",
     ]
 
@@ -44,16 +45,19 @@ def test_game_settings_render_changed_values() -> None:
     assert "любой участник лобби после набора минимума" in text
 
 
-def test_game_settings_callbacks_require_management_and_lock_writes() -> None:
+def test_game_settings_callbacks_require_management_and_shared_locked_writes() -> None:
     source = (ROOT / "app/games/settings_handlers.py").read_text(encoding="utf-8")
-    toggle = source.split("async def game_settings_toggle", 1)[1]
+    lock_helper = source.split("async def _locked_settings", 1)[1].split("async def _render", 1)[0]
+    generic_toggle = source.split("async def game_settings_toggle", 1)[1].split(
+        "async def mafia_settings_toggle", 1
+    )[0]
 
     assert "can_manage_group(" in source
-    assert ".with_for_update()" in toggle
-    assert toggle.index("_managed_group(") < toggle.index(".with_for_update()")
-    assert "GameGroupSettings(" in toggle
-    assert "await session.flush()" in toggle
-    assert "await session.commit()" in toggle
+    assert ".with_for_update()" in lock_helper
+    assert "GameGroupSettings(" in lock_helper
+    assert "await session.flush()" in lock_helper
+    assert "await _locked_settings(session, group_id=group.id)" in generic_toggle
+    assert "await session.commit()" in generic_toggle
 
 
 def test_game_settings_router_precedes_generic_game_router() -> None:
