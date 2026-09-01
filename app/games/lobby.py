@@ -19,7 +19,12 @@ log = structlog.get_logger()
 
 
 def lobby_markup(game_id: int, game_type: str) -> InlineKeyboardMarkup:
-    start_callback = f"gm:ms:{game_id}" if game_type == "mafia" else f"gm:s:{game_id}"
+    if game_type == "mafia":
+        start_callback = f"gm:ms:{game_id}"
+    elif game_type == "spy":
+        start_callback = f"gm:ss:{game_id}"
+    else:
+        start_callback = f"gm:s:{game_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="➕ Присоединиться", callback_data=f"gm:j:{game_id}"),
@@ -52,7 +57,9 @@ async def lobby_text(
     lines.extend([
         "",
         f"Минимум для старта: {definition.min_players}",
-        "⏱ Лобби автоматически закроется через 10 минут без старта." if game.game_type == "mafia" else "",
+        "⏱ Лобби автоматически закроется через 10 минут без старта."
+        if game.game_type in {"mafia", "spy"}
+        else "",
         "Обычная переписка группы не влияет на игру.",
     ])
     return "\n".join(line for line in lines if line != "")
@@ -66,7 +73,7 @@ async def ensure_lobby_message(
     game: GameSession,
     manager: GameManager,
 ) -> int | None:
-    if game.game_type == "mafia" and game.deadline_at is None:
+    if game.game_type in {"mafia", "spy"} and game.deadline_at is None:
         game.deadline_at = datetime.now(timezone.utc) + timedelta(minutes=10)
         await session.commit()
     text = await lobby_text(session, game=game, manager=manager)
