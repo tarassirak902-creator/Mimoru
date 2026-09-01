@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -242,6 +242,16 @@ class GameManager:
         players = await self.list_players(session, game_id=game.id, for_update=True)
         if len(players) < definition.min_players:
             raise GamePlayerError("not enough players")
+
+        # A lobby leaver remains reusable while the lobby is open so they can join again.
+        # Once the game starts, however, those rows are not participants and must not be
+        # visible to engines that intentionally load every GamePlayer row for the session.
+        await session.execute(
+            delete(GamePlayer).where(
+                GamePlayer.game_id == game.id,
+                GamePlayer.status == "left",
+            )
+        )
 
         game.status = GameSessionStatus.RUNNING.value
         game.phase = "starting"
