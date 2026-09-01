@@ -76,6 +76,20 @@ def _afk_text(state: dict) -> str | None:
     return "⌛ За повторное бездействие игру покидают: " + ", ".join(removed) + "."
 
 
+def _finish_event_lines(state: dict) -> list[str]:
+    context = state.get("finish_context") or {}
+    phase = context.get("phase")
+    lines: list[str] = []
+    if phase == MafiaPhase.DAY_VOTING.value:
+        lines.append(_day_result_text(state))
+    elif phase == MafiaPhase.NIGHT_ACTIONS.value:
+        lines.append(_night_result_text(state))
+    afk = _afk_text(state)
+    if afk:
+        lines.append(afk)
+    return lines
+
+
 async def mafia_results_text(session: AsyncSession, game: GameSession) -> str:
     players = list((await session.scalars(
         select(GamePlayer)
@@ -94,12 +108,20 @@ async def mafia_public_text(session: AsyncSession, game: GameSession) -> str:
     state = dict(game.state_json or {})
     if game.status == GameSessionStatus.FINISHED.value:
         winner = "🔪 Мафия" if game.finish_reason == "winner:mafia" else "🏘 Мирные жители"
-        return (
-            "🏆 МАФИЯ · ИГРА ЗАВЕРШЕНА\n\n"
-            f"Победила команда: {winner}\n"
-            f"🎮 Раундов: {game.round_no}\n\n"
-            "Результат сохранён в профилях и рейтинге группы."
-        )
+        lines = [
+            "🏆 МАФИЯ · ИГРА ЗАВЕРШЕНА",
+            "",
+        ]
+        lines.extend(_finish_event_lines(state))
+        if len(lines) > 2:
+            lines.append("")
+        lines.extend([
+            f"Победила команда: {winner}",
+            f"🎮 Раундов: {game.round_no}",
+            "",
+            "Результат сохранён в профилях и рейтинге группы.",
+        ])
+        return "\n".join(lines)
     if game.status == GameSessionStatus.CANCELLED.value:
         return "❌ МАФИЯ ОТМЕНЕНА\n\nИгровая сессия закрыта. Группа снова свободна для новой игры."
     title = PHASE_TITLES.get(game.phase, "🐺 МАФИЯ")
