@@ -12,8 +12,8 @@ def test_game_messages_are_reused_and_retired_safely() -> None:
     assert "message is not modified" in source
     assert "message to delete not found" in source
     assert "TelegramForbiddenError" in source
-    assert "record.active = False" in source
-    assert "record.retired_at = datetime.now(timezone.utc)" in source
+    assert "current.active = False" in source
+    assert "current.retired_at = datetime.now(timezone.utc)" in source
     assert "GameMessage.active.is_(True)" in source
 
 
