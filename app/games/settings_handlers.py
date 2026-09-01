@@ -114,7 +114,15 @@ async def game_settings_toggle(callback: CallbackQuery, bot: Bot, session: Async
         return
     settings = await session.get(GameGroupSettings, group.id)
     if settings is None:
-        settings = GameGroupSettings(group_id=group.id)
+        settings = GameGroupSettings(
+            group_id=group.id,
+            enabled=True,
+            allowed_games=[],
+            creator_policy="lobby_creator",
+            allow_duels=False,
+            rating_enabled=True,
+            settings_json={},
+        )
         session.add(settings)
         await session.flush()
 
