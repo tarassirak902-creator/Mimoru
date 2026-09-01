@@ -12,6 +12,31 @@ from app.services.access import can_manage_group
 
 router = Router(name=__name__)
 
+_MAFIA_TIMER_PRESETS: dict[str, tuple[int, ...]] = {
+    "day_start": (5, 10, 15, 20, 30, 60),
+    "discussion": (30, 60, 90, 120, 180, 300),
+    "voting": (15, 30, 60, 90, 120, 180),
+    "result": (5, 10, 15, 20, 30, 60),
+    "night_start": (5, 10, 15, 20, 30, 60),
+    "night": (15, 30, 60, 90, 120, 180),
+}
+_MAFIA_TIMER_DEFAULTS: dict[str, int] = {
+    "day_start": 15,
+    "discussion": 90,
+    "voting": 60,
+    "result": 10,
+    "night_start": 10,
+    "night": 60,
+}
+_MAFIA_TIMER_SETTING_KEYS: dict[str, str] = {
+    "day_start": "day_start_seconds",
+    "discussion": "discussion_seconds",
+    "voting": "voting_seconds",
+    "result": "result_seconds",
+    "night_start": "night_start_seconds",
+    "night": "night_seconds",
+}
+
 
 async def _active_group(session: AsyncSession, chat_id: int) -> Group | None:
     return await session.scalar(
@@ -28,9 +53,13 @@ def _setting_values(settings: GameGroupSettings | None) -> tuple[bool, bool, str
     return settings.enabled, settings.rating_enabled, settings.creator_policy
 
 
-def _mafia_values(settings: GameGroupSettings | None) -> tuple[bool, bool, int]:
+def _mafia_dict(settings: GameGroupSettings | None) -> dict:
     all_settings = dict(settings.settings_json or {}) if settings is not None else {}
-    mafia = dict(all_settings.get("mafia") or {})
+    return dict(all_settings.get("mafia") or {})
+
+
+def _mafia_values(settings: GameGroupSettings | None) -> tuple[bool, bool, int]:
+    mafia = _mafia_dict(settings)
     self_heal = bool(mafia.get("doctor_can_self_heal", True))
     repeat_heal = bool(mafia.get("doctor_can_heal_same_player_twice", False))
     try:
@@ -39,6 +68,29 @@ def _mafia_values(settings: GameGroupSettings | None) -> tuple[bool, bool, int]:
         afk_strikes = 2
     afk_strikes = max(1, min(5, afk_strikes))
     return self_heal, repeat_heal, afk_strikes
+
+
+def _mafia_timer_values(settings: GameGroupSettings | None) -> dict[str, int]:
+    mafia = _mafia_dict(settings)
+    values: dict[str, int] = {}
+    for timer, default in _MAFIA_TIMER_DEFAULTS.items():
+        setting_key = _MAFIA_TIMER_SETTING_KEYS[timer]
+        try:
+            value = int(mafia.get(setting_key, default))
+        except (TypeError, ValueError):
+            value = default
+        presets = _MAFIA_TIMER_PRESETS[timer]
+        values[timer] = value if value in presets else default
+    return values
+
+
+def _next_mafia_timer_value(timer: str, current: int) -> int:
+    presets = _MAFIA_TIMER_PRESETS[timer]
+    try:
+        index = presets.index(current)
+    except ValueError:
+        return _MAFIA_TIMER_DEFAULTS[timer]
+    return presets[(index + 1) % len(presets)]
 
 
 def settings_text(settings: GameGroupSettings | None) -> str:
@@ -107,7 +159,60 @@ def mafia_settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardM
             text=f"⌛ AFK до удаления: {afk_strikes}",
             callback_data="gm:cfg:mafia:afk",
         )],
+        [InlineKeyboardButton(text="⏱ Таймеры", callback_data="gm:cfg:mafia:timers")],
         [InlineKeyboardButton(text="◀️ Общие настройки", callback_data="gm:settings")],
+    ])
+
+
+def mafia_timer_settings_text(settings: GameGroupSettings | None) -> str:
+    timers = _mafia_timer_values(settings)
+    return (
+        "🐺 МАФИЯ · ТАЙМЕРЫ\n\n"
+        f"🌅 Старт дня: {timers['day_start']} с\n"
+        f"💬 Обсуждение: {timers['discussion']} с\n"
+        f"🗳 Голосование: {timers['voting']} с\n"
+        f"📣 Показ результата: {timers['result']} с\n"
+        f"🌙 Старт ночи: {timers['night_start']} с\n"
+        f"🎯 Ночные действия: {timers['night']} с\n\n"
+        "Нажатие на кнопку переключает следующий безопасный пресет. "
+        "Изменения применяются со следующей партии."
+    )
+
+
+def mafia_timer_settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardMarkup:
+    timers = _mafia_timer_values(settings)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"🌅 День: {timers['day_start']}с",
+                callback_data="gm:cfg:mafia:timer:day_start",
+            ),
+            InlineKeyboardButton(
+                text=f"💬 Обсуждение: {timers['discussion']}с",
+                callback_data="gm:cfg:mafia:timer:discussion",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"🗳 Голосование: {timers['voting']}с",
+                callback_data="gm:cfg:mafia:timer:voting",
+            ),
+            InlineKeyboardButton(
+                text=f"📣 Результат: {timers['result']}с",
+                callback_data="gm:cfg:mafia:timer:result",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"🌙 Старт ночи: {timers['night_start']}с",
+                callback_data="gm:cfg:mafia:timer:night_start",
+            ),
+            InlineKeyboardButton(
+                text=f"🎯 Ночь: {timers['night']}с",
+                callback_data="gm:cfg:mafia:timer:night",
+            ),
+        ],
+        [InlineKeyboardButton(text="◀️ Настройки Mafia", callback_data="gm:cfg:mafia")],
     ])
 
 
@@ -175,6 +280,15 @@ async def _render_mafia(callback: CallbackQuery, settings: GameGroupSettings | N
     )
 
 
+async def _render_mafia_timers(callback: CallbackQuery, settings: GameGroupSettings | None) -> None:
+    if callback.message is None:
+        return
+    await callback.message.edit_text(
+        mafia_timer_settings_text(settings),
+        reply_markup=mafia_timer_settings_markup(settings),
+    )
+
+
 @router.callback_query(F.data == "gm:settings")
 async def game_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
     group = await _managed_group(callback, bot, session)
@@ -192,6 +306,16 @@ async def mafia_settings(callback: CallbackQuery, bot: Bot, session: AsyncSessio
         return
     settings = await session.get(GameGroupSettings, group.id)
     await _render_mafia(callback, settings)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "gm:cfg:mafia:timers")
+async def mafia_timer_settings(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    settings = await session.get(GameGroupSettings, group.id)
+    await _render_mafia_timers(callback, settings)
     await callback.answer()
 
 
@@ -248,3 +372,33 @@ async def mafia_settings_toggle(callback: CallbackQuery, bot: Bot, session: Asyn
     await session.refresh(settings)
     await _render_mafia(callback, settings)
     await callback.answer("Настройки Mafia сохранены")
+
+
+@router.callback_query(
+    F.data.regexp(r"^gm:cfg:mafia:timer:(day_start|discussion|voting|result|night_start|night)$")
+)
+async def mafia_timer_settings_toggle(
+    callback: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    settings = await _locked_settings(session, group_id=group.id)
+    if settings is None:
+        await callback.answer("Группа больше не подключена к Mimoru.", show_alert=True)
+        return
+
+    timer = (callback.data or "").rsplit(":", 1)[-1]
+    timers = _mafia_timer_values(settings)
+    all_settings = dict(settings.settings_json or {})
+    mafia = dict(all_settings.get("mafia") or {})
+    mafia[_MAFIA_TIMER_SETTING_KEYS[timer]] = _next_mafia_timer_value(timer, timers[timer])
+    all_settings["mafia"] = mafia
+    settings.settings_json = all_settings
+
+    await session.commit()
+    await session.refresh(settings)
+    await _render_mafia_timers(callback, settings)
+    await callback.answer("Таймер Mafia сохранён")
