@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_game_recovery_is_durable_and_serialized() -> None:
     source = (ROOT / "app/games/recovery.py").read_text(encoding="utf-8")
 
+    assert "GameSessionStatus.LOBBY.value" in source
     assert "GameSessionStatus.RUNNING.value" in source
     assert "GameSessionStatus.RECOVERING.value" in source
     assert ".with_for_update()" in source
@@ -20,6 +21,21 @@ def test_game_recovery_is_durable_and_serialized() -> None:
     assert '"game_start_recovered"' in source
     assert '"game_recovered"' in source
     assert '"game_recovery_failed"' in source
+
+
+def test_lobby_recovery_resyncs_lobby_and_main_panel() -> None:
+    source = (ROOT / "app/games/recovery.py").read_text(encoding="utf-8")
+    recovery = source.split("async def recover_active_games", 1)[1].split(
+        "async def process_game_timeouts", 1
+    )[0]
+
+    assert "from app.games.lobby import close_lobby_message, ensure_lobby_message" in source
+    assert "manager = GameManager()" in source
+    assert "if game.status == GameSessionStatus.LOBBY.value:" in recovery
+    assert "await ensure_lobby_message(" in recovery
+    assert "manager=manager" in recovery
+    assert "await ensure_game_panel(bot, session, group=group, pin=False)" in recovery
+    assert '"game_lobby_recovered"' in recovery
 
 
 def test_failed_recovery_rolls_back_before_marking_recovering() -> None:
