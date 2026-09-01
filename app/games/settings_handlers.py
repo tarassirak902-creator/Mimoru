@@ -160,7 +160,24 @@ def mafia_settings_markup(settings: GameGroupSettings | None) -> InlineKeyboardM
             callback_data="gm:cfg:mafia:afk",
         )],
         [InlineKeyboardButton(text="⏱ Таймеры", callback_data="gm:cfg:mafia:timers")],
+        [InlineKeyboardButton(text="♻️ Сбросить настройки", callback_data="gm:cfg:mafia:reset")],
         [InlineKeyboardButton(text="◀️ Общие настройки", callback_data="gm:settings")],
+    ])
+
+
+def mafia_reset_text() -> str:
+    return (
+        "♻️ СБРОС НАСТРОЕК MAFIA\n\n"
+        "Будут восстановлены стандартные правила Доктора, AFK-порог и все таймеры Mafia.\n\n"
+        "Общие настройки игр, рейтинг и другие параметры группы не изменятся. "
+        "Сброс применится только к следующим партиям."
+    )
+
+
+def mafia_reset_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="♻️ Сбросить", callback_data="gm:cfg:mafia:reset:confirm")],
+        [InlineKeyboardButton(text="◀️ Отмена", callback_data="gm:cfg:mafia")],
     ])
 
 
@@ -319,6 +336,16 @@ async def mafia_timer_settings(callback: CallbackQuery, bot: Bot, session: Async
     await callback.answer()
 
 
+@router.callback_query(F.data == "gm:cfg:mafia:reset")
+async def mafia_settings_reset_prompt(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    if callback.message is not None:
+        await callback.message.edit_text(mafia_reset_text(), reply_markup=mafia_reset_markup())
+    await callback.answer()
+
+
 @router.callback_query(F.data.regexp(r"^gm:cfg:(enabled|rating|creator)$"))
 async def game_settings_toggle(callback: CallbackQuery, bot: Bot, session: AsyncSession) -> None:
     group = await _managed_group(callback, bot, session)
@@ -402,3 +429,26 @@ async def mafia_timer_settings_toggle(
     await session.refresh(settings)
     await _render_mafia_timers(callback, settings)
     await callback.answer("Таймер Mafia сохранён")
+
+
+@router.callback_query(F.data == "gm:cfg:mafia:reset:confirm")
+async def mafia_settings_reset_confirm(
+    callback: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+) -> None:
+    group = await _managed_group(callback, bot, session)
+    if group is None:
+        return
+    settings = await _locked_settings(session, group_id=group.id)
+    if settings is None:
+        await callback.answer("Группа больше не подключена к Mimoru.", show_alert=True)
+        return
+
+    all_settings = dict(settings.settings_json or {})
+    all_settings.pop("mafia", None)
+    settings.settings_json = all_settings
+    await session.commit()
+    await session.refresh(settings)
+    await _render_mafia(callback, settings)
+    await callback.answer("Настройки Mafia сброшены")
