@@ -16,7 +16,7 @@ from app.games.registry import GameRegistry, game_registry
 
 
 log = structlog.get_logger()
-_TIMED_LOBBY_GAMES = {"mafia", "spy", "quiz", "battleship", "roulette", "crocodile", "cards", "arena", "words"}
+_TIMED_LOBBY_GAMES = {"mafia", "spy", "quiz", "battleship", "roulette", "crocodile", "cards", "arena", "words", "detective"}
 
 
 def lobby_markup(game_id: int, game_type: str) -> InlineKeyboardMarkup:
@@ -38,6 +38,8 @@ def lobby_markup(game_id: int, game_type: str) -> InlineKeyboardMarkup:
         start_callback = f"gm:as:{game_id}"
     elif game_type == "words":
         start_callback = f"gm:ws:{game_id}"
+    elif game_type == "detective":
+        start_callback = f"gm:ds:{game_id}"
     else:
         start_callback = f"gm:s:{game_id}"
     return InlineKeyboardMarkup(inline_keyboard=[
