@@ -27,7 +27,8 @@ def test_spy_lobby_uses_special_start_and_shared_lobby_message() -> None:
 
     assert 'elif game_type == "spy":' in source
     assert 'start_callback = f"gm:ss:{game_id}"' in source
-    assert 'game.game_type in {"mafia", "spy"}' in source
+    timed = source.split("_TIMED_LOBBY_GAMES", 1)[1].split("}", 1)[0]
+    assert '"spy"' in timed
     assert "game.lobby_message_id" in source
     assert "bot.edit_message_text(" in source
 
