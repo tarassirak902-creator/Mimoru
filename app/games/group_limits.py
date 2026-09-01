@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from app.db.game_models import GameGroupSettings
+from app.db.game_models import GameGroupSettings, GameSession
 from app.games.config import GameDefinition
 
 
 PLAYER_CAP_KEY = "max_players"
+LOBBY_CAP_KEY = "lobby_max_players"
 PLAYER_CAP_PRESETS = (4, 6, 8, 12, 20)
 
 
@@ -27,6 +28,15 @@ def effective_max_players(
     if cap is None:
         return definition.max_players
     return max(definition.min_players, min(definition.max_players, cap))
+
+
+def lobby_max_players(game: GameSession, definition: GameDefinition) -> int:
+    raw = dict(game.state_json or {}).get(LOBBY_CAP_KEY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return definition.max_players
+    return max(definition.min_players, min(definition.max_players, value))
 
 
 def set_player_cap(settings: GameGroupSettings, value: int | None) -> None:
