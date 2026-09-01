@@ -10,6 +10,6 @@ def test_profile_keyboard_is_compact_two_column_grid() -> None:
 
     assert '[button("profile", "👤 Профиль"), button("history", "⚖️ История")]' in block
     assert '[button("games", "🎮 Игры"), button("rp", rp_label)]' in block
-    assert '[button("close", "✖️ Закрыть")]' in block
+    assert '[button("close", "❌ Закрыть")]' in block
     assert '[button("profile", "👤 Профиль")]' not in block
     assert '[button("rp", rp_label)]' not in block
