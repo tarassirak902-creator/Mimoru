@@ -10,12 +10,29 @@ def test_game_recovery_is_durable_and_serialized() -> None:
     assert "GameSessionStatus.RUNNING.value" in source
     assert "GameSessionStatus.RECOVERING.value" in source
     assert ".with_for_update()" in source
-    assert "entry.engine.restore(session, game)" in source
+    assert 'game.phase in {"starting", "recovering"}' in source
+    assert "await entry.engine.start(session, game)" in source
+    assert "await entry.engine.restore(session, game)" in source
+    assert "await session.rollback()" in source
     assert "game.status = GameSessionStatus.RECOVERING.value" in source
     assert 'game.finish_reason = "missing_game_engine"' in source
     assert '_sync_engine_ui(bot, entry.engine, session, game)' in source
+    assert '"game_start_recovered"' in source
     assert '"game_recovered"' in source
     assert '"game_recovery_failed"' in source
+
+
+def test_failed_recovery_rolls_back_before_marking_recovering() -> None:
+    source = (ROOT / "app/games/recovery.py").read_text(encoding="utf-8")
+    recovery = source.split("async def recover_active_games", 1)[1].split(
+        "async def process_game_timeouts", 1
+    )[0]
+
+    rollback = recovery.index("await session.rollback()")
+    refetch = recovery.index("select(GameSession).where(GameSession.id == game_id).with_for_update()", rollback)
+    mark = recovery.index("game.status = GameSessionStatus.RECOVERING.value", refetch)
+    commit = recovery.index("await session.commit()", mark)
+    assert rollback < refetch < mark < commit
 
 
 def test_game_timeouts_revalidate_deadline_under_lock() -> None:
