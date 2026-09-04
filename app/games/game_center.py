@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Group
-from app.games.panels import active_game_for_group, ensure_game_panel, panel_markup, panel_text
+from app.games.panels import active_game_for_group, ensure_game_panel
 from app.games.registry import game_registry
 
 
@@ -42,12 +42,7 @@ async def send_game_center_snapshot(
     group: Group,
     reply_to_message_id: int,
 ) -> None:
-    """Open the game selection without creating a second bot message.
-
-    The persistent game panel is the single visible game-center message in the
-    group. If it does not exist yet, ensure_game_panel creates it once; then we
-    edit that same message into the game-selection view.
-    """
+    """Open game selection in the persistent game-center message."""
     panel = await ensure_game_panel(bot, session, group=group)
     if panel is None:
         return
