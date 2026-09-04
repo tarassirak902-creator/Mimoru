@@ -27,21 +27,18 @@ def test_games_text_alias_is_exact_and_owned_by_game_engine() -> None:
     assert entertainment.index("game_text_entry.router") < entertainment.index("game_handlers.router")
 
 
-def test_game_center_entries_send_visible_snapshot() -> None:
+def test_game_center_entries_reuse_single_persistent_panel() -> None:
     helper = (ROOT / "app/games/game_center.py").read_text(encoding="utf-8")
     command = (ROOT / "app/games/handlers.py").read_text(encoding="utf-8")
     text_entry = (ROOT / "app/games/text_entry.py").read_text(encoding="utf-8")
 
     assert "await ensure_game_panel(bot, session, group=group)" in helper
-    assert "active_game_for_group(session, group.id)" in helper
-    assert "await bot.send_message(" in helper
-    assert "panel_text(active_game=active_game)" in helper
-    assert "panel_markup(active_game=active_game)" in helper
-    assert "reply_to_message_id=reply_to_message_id" in helper
+    assert "await bot.send_message(" not in helper
+    assert "await bot.edit_message_text(" in helper
+    assert "_games_text()" in helper
+    assert "_games_markup()" in helper
     assert "await send_game_center_snapshot(" in command
-    assert "reply_to_message_id=message.message_id" in command
     assert "await send_game_center_snapshot(" in text_entry
-    assert "reply_to_message_id=message.message_id" in text_entry
 
 
 def test_game_router_does_not_capture_ordinary_group_text() -> None:
