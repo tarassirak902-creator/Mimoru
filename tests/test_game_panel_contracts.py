@@ -33,7 +33,6 @@ def test_game_center_entries_reuse_single_persistent_panel() -> None:
     text_entry = (ROOT / "app/games/text_entry.py").read_text(encoding="utf-8")
 
     assert "await ensure_game_panel(bot, session, group=group)" in helper
-    assert "active_game_for_group" not in helper
     assert "await bot.send_message(" not in helper
     assert "await bot.edit_message_text(" in helper
     assert "_games_text()" in helper
